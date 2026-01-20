@@ -31,17 +31,20 @@ An ideal dataset would include data about the amount of greenhouse gas emissions
 # IDENTIFY POTENTIAL DATA SOURCES FOR YOUR TOPIC
 
 https://www.nhtsa.gov/nhtsa-datasets-and-apis
+
 These datasets are produced by the US National Highway Traffic Safety Administration, a federal agency under the US Department of Transportation, making it a highly credible external publicly available dataset. This dataset covers both categorized risks and potential outcomes, as it discusses the types and categories of data that define historical frequency, as it provides numbers for annual crashes, fatalities, and injuries.
 
 Using the data, we could create crash frequency tables, severity distributions, urban vs. rural crash comparisons, and time series plots of AV related accidents. These tables would allow us to focus on the impact of AVs on accident rates.
 
 
 https://catalog.data.gov/dataset/energy-and-emissions-implications-of-automated-vehicles-in-the-u-s-energy-system 
+
 This dataset was produced by the U.S. Environmental Protection Agency, a federal agency considered with how external factors, such as AV’s, affect the environment. This dataset helps categorize risks and potential outcomes, since it talks about how simulations were used to find changes in environmental factors and risks/outcomes for this project. 
 
 Using this data, we could compare emissions, fuel use by simulation types alongside energy production mixes and efficiency improvements. This would allow us to create bar graphs (emissions by scenario) and line charts (emissions over time) to help illustrate our central point.
 
 https://waymo.com/open/download 
+
 Waymo, a leading AV manufacturing company, has provided several datasets which include multimodal and synchronised sensor data from cameras, LiDAR, maps, and trajectory data. This data has been collected across many cities and weather conditions with carefully annotated 2D and 3D labels.
 
 Because of their size, we can use these datasets to create traffic-scene heatmaps, distribution charts of obstacle occurrences to see how often potential crashes occur, and analyses of certain interactions, such as stopping at pedestrian crossings or lane changes. The frequency at which frames are captured in the Waymo datasets is very high, so this data will allow us to come to strong conclusions after analysis. 
