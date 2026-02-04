@@ -1,0 +1,141 @@
+COMBINED DATA FOR AUTONOMOUS VEHICLE CLIMATE IMPACT MODEL
+
+=== EMISSION FACTORS ===
+Vehicle_Type,Fuel_Type,PM2.5_g_per_km,NOx_g_per_km,CO2_g_per_km,CO_g_per_km,HC_g_per_km,Source
+Passenger_Car_Gasoline,Gasoline,0.005,0.050,250,2.00,0.15,EPA_MOVES4_2024
+Passenger_Car_Diesel,Diesel,0.010,0.200,180,0.50,0.08,EPA_MOVES4_2024
+Light_Truck_Gasoline,Gasoline,0.008,0.080,320,2.50,0.20,EPA_MOVES4_2024
+Light_Truck_Diesel,Diesel,0.015,0.250,220,0.60,0.10,EPA_MOVES4_2024
+Heavy_Duty_Diesel,Diesel,0.050,0.800,850,3.00,0.30,EPA_MOVES4_2024
+Electric_Vehicle_BEV,Electric,0.000,0.000,0,0.00,0.00,EPA_MOVES4_Tailpipe
+Electric_Vehicle_Lifecycle,Electric,0.002,0.005,100,0.00,0.00,Lifecycle_Analysis
+Autonomous_EV_Lifecycle,Electric,0.002,0.006,108,0.00,0.00,Nature_Communications_2023
+Conventional_Hybrid,Gasoline,0.003,0.030,180,1.20,0.10,EPA_MOVES4_2024
+Plug_in_Hybrid,Gasoline,0.002,0.020,120,0.80,0.08,EPA_MOVES4_2024
+Passenger_Car_CNG,Natural_Gas,0.001,0.050,200,1.50,0.12,CARB_2022
+New_Diesel_LEV_II,Diesel,0.008,0.150,170,0.40,0.06,CARB_Cost_Effectiveness_2022
+Future_ICE_2030,Gasoline,0.003,0.030,180,1.00,0.08,Projection_Advanced_Tech
+Future_AV_EV_2030,Electric,0.001,0.003,90,0.00,0.00,Projection_Improved_Manufacturing
+Future_Hydrogen,Hydrogen,0.000,0.000,0,0.00,0.00,Fuel_Cell_Tailpipe
+Road_Dust_Resuspension,All,0.015,0.000,0,0.00,0.00,CARB_AP42_Chapter_13
+Brake_Wear,All,0.005,0.000,0,0.00,0.00,EMFAC2011_Documentation
+Tire_Wear,All,0.004,0.000,0,0.00,0.00,EMFAC2011_Documentation
+
+=== ATMOSPHERIC PARAMETERS ===
+Parameter,Symbol,Min_Value,Max_Value,Typical_Urban_Day,Typical_Urban_Night,Units,Notes
+Horizontal_Wind_Speed,u,1.0,10.0,3.5,2.0,m/s,Mean wind at 10m height
+Vertical_Wind_Speed,w,-0.5,0.5,0.1,0.0,m/s,Usually small compared to horizontal
+Horizontal_Diffusion_Coeff,D_h,10,1000,300,50,m²/s,Higher during day due to convection
+Vertical_Diffusion_Coeff,D_z,1,100,30,5,m²/s,Strongly dependent on stability
+Mixing_Height,h,100,2000,1500,200,m,Planetary boundary layer height
+Friction_Velocity,u_star,0.1,1.0,0.4,0.2,m/s,Related to surface roughness
+Von_Karman_Constant,k,0.35,0.41,0.40,0.40,dimensionless,Universal constant
+Deposition_Velocity_PM2.5,v_d,0.001,0.010,0.003,0.002,m/s,Dry deposition
+Deposition_Velocity_PM10,v_d,0.005,0.050,0.015,0.010,m/s,Larger particles settle faster
+Surface_Roughness_Urban,z_0,0.5,2.0,1.0,1.0,m,Building/tree height effects
+Temperature_Lapse_Rate,Γ,-0.010,0.020,0.010,-0.005,K/m,Negative = unstable
+Monin_Obukhov_Length,L,-1000,1000,-50,100,m,Stability parameter
+Pasquill_Gifford_A,σ_multiplier,0.22,0.32,0.27,0.15,dimensionless,Very unstable
+Pasquill_Gifford_D,σ_multiplier,0.08,0.12,0.10,0.10,dimensionless,Neutral
+Pasquill_Gifford_F,σ_multiplier,0.04,0.06,0.05,0.05,dimensionless,Very stable
+Turbulent_Kinetic_Energy_Urban,TKE,0.5,5.0,2.0,0.5,m²/s²,Urban canopy
+Eddy_Dissipation_Rate,ε,0.001,0.1,0.03,0.005,m²/s³,Energy cascade
+
+=== AUTONOMOUS VEHICLE ADOPTION SCENARIOS ===
+Year,Scenario,Market_Penetration_Percent,Total_AVs_Millions,Level_2_Plus_Percent,Level_3_Percent,Level_4_Percent,Level_5_Percent,Source
+2024,All,8,12,20,0,0,0,Morgan_Stanley_2024
+2025,Baseline,10,15,22,1,0.5,0,Multiple_Sources
+2025,Low_Funding,8,12,20,0.5,0.2,0,Conservative_Estimate
+2025,High_Funding,12,18,25,2,1,0,Optimistic_Estimate
+2030,Baseline,28,42,30,10,2.5,0,Morgan_Stanley_Goldman_Sachs
+2030,Low_Funding,20,30,25,7,1.5,0,Bear_Case
+2030,High_Funding,36,54,35,15,5,0,Bull_Case_Morgan_Stanley
+2030,Very_High_Funding,40,60,38,18,7,0,Aggressive_Scenario
+2035,Baseline,45,90,40,25,10,1,Interpolation_WEF_2025
+2035,Low_Funding,35,70,35,20,7,0.5,Conservative
+2035,High_Funding,55,110,45,30,15,2,Optimistic
+2040,Baseline,60,180,45,35,20,5,VTPI_Allied_Research
+2040,Low_Funding,45,135,40,30,15,3,Conservative
+2040,High_Funding,75,225,50,40,25,10,Optimistic
+2045,Baseline,70,280,48,38,25,10,Long_Term_Projection
+2050,Baseline,80,400,50,40,30,20,Long_Term_Projection
+2050,Low_Funding,65,325,45,35,25,15,Conservative_Long_Term
+2050,High_Funding,90,450,52,42,35,25,Optimistic_Long_Term
+
+=== FUNDING SCENARIOS ===
+Funding_Level,Annual_Investment_Billion_USD,Description,Adoption_Rate_Parameter_k,Threshold_Year_t0,Max_Penetration_2040_Percent,Manufacturing_Emission_Increase_Percent,Operational_Efficiency_Gain_Percent,VMT_Rebound_Effect_Percent,Infrastructure_Readiness_Score
+Very_Low,10,Minimal government support,0.08,2032,30,45,15,25,3
+Low,25,Basic research funding only,0.12,2030,45,42,18,30,4
+Baseline,50,Moderate mixed funding,0.18,2028,60,40,21.2,35,6
+Medium_High,100,Strong government + private,0.25,2026,70,38,23,40,7
+High,200,Aggressive deployment programs,0.35,2024,80,35,25,45,8
+Very_High,500,Moonshot level commitment,0.50,2023,90,30,28,50,9
+
+=== CLIMATE IMPACT PARAMETERS ===
+Parameter,Value,Units,Description,Source
+Aerosol_Radiative_Efficiency_Min,-0.5,W/m²/Tg,Minimum cooling effect of PM2.5,IPCC_AR6
+Aerosol_Radiative_Efficiency_Max,-5.0,W/m²/Tg,Maximum cooling effect of PM2.5,IPCC_AR6
+Aerosol_Radiative_Efficiency_Typical,-2.0,W/m²/Tg,Typical aerosol forcing,Literature_Average
+Climate_Sensitivity_Parameter,0.8,K/(W/m²),Temperature response to forcing,IPCC_Range_Central
+CO2_Radiative_Forcing_Coeff,5.35,W/m²,Logarithmic forcing coefficient,IPCC_Standard
+CO2_Pre_Industrial,280,ppm,Pre-industrial CO2 concentration,Historical_Data
+CO2_Current_2024,420,ppm,Current atmospheric CO2,NOAA_2024
+Global_Warming_Potential_CH4_100yr,28,dimensionless,Methane GWP over 100 years,IPCC_AR6
+Global_Warming_Potential_N2O_100yr,265,dimensionless,Nitrous oxide GWP over 100 years,IPCC_AR6
+PM2.5_Health_Cost,50000,USD/ton,Mortality and morbidity costs,EPA_Benefit_Cost
+NOx_Ozone_Formation_Potential,0.15,dimensionless,NOx contribution to O3,Regional_Chemistry
+Black_Carbon_GWP,900,dimensionless,BC short-term warming,IPCC_Estimate
+Organic_Carbon_Cooling,-100,dimensionless,OC cooling effect,IPCC_Estimate
+Deposition_Removal_Rate_PM2.5,0.00003,1/s,0.003 m/s divided by 100m mixing height,Calculated
+Chemical_Decay_NOx,0.000028,1/s,Lifetime ~10 hours in urban areas,Atmospheric_Chemistry
+Vehicle_Lifetime_km,200000,km,Average vehicle lifetime distance,Industry_Standard
+US_Total_Vehicle_Fleet_2024,280,million,Total registered vehicles USA,FHWA_Statistics
+Annual_VMT_per_Vehicle,20000,km,Average distance driven per year,FHWA_Statistics
+Electric_Grid_Emission_Factor_2024,0.38,kg_CO2/kWh,US average grid emissions,EPA_eGRID
+Electric_Grid_Emission_Factor_2030,0.28,kg_CO2/kWh,Projected with renewables growth,EIA_Projection
+Electric_Grid_Emission_Factor_2040,0.18,kg_CO2/kWh,High renewable penetration,EIA_Projection
+EV_Energy_Consumption,0.20,kWh/km,Battery electric vehicle efficiency,Industry_Average
+AV_Computing_Power,1000,Watts,Additional power for autonomy systems,Industry_Estimates
+Manufacturing_Emissions_Conventional,7000,kg_CO2,Vehicle production emissions,Lifecycle_Assessment
+Manufacturing_Emissions_BEV,10000,kg_CO2,Includes battery production,Lifecycle_Assessment
+Manufacturing_Emissions_AV_System,4000,kg_CO2,Extra sensors cameras computers,Nature_Communications_2023
+
+=== METEOROLOGICAL DATA BY CITY ===
+City,Season,Time_of_Day,Wind_Speed_m_s,Wind_Direction_deg,Temperature_C,Relative_Humidity_Percent,Mixing_Height_m,Stability_Class,Solar_Radiation_W_m2,Pressure_hPa,Precipitation_mm_h
+Los_Angeles,Summer,Day,3.5,270,28,55,1800,B,850,1013,0.0
+Los_Angeles,Summer,Night,2.0,290,18,75,250,E,0,1013,0.0
+Los_Angeles,Winter,Day,2.8,180,15,65,1200,C,550,1015,0.0
+Los_Angeles,Winter,Night,1.5,200,8,80,180,F,0,1015,0.0
+New_York,Summer,Day,4.2,225,30,60,1600,B,800,1012,0.0
+New_York,Summer,Night,2.5,240,22,70,280,D,0,1012,0.0
+New_York,Winter,Day,5.0,315,-2,55,800,D,400,1020,0.0
+New_York,Winter,Night,3.5,320,-8,65,200,F,0,1020,0.0
+Chicago,Summer,Day,4.8,180,28,58,1700,B,820,1010,0.0
+Chicago,Summer,Night,3.0,200,20,68,300,D,0,1010,0.0
+Chicago,Winter,Day,6.2,270,-5,60,600,D,350,1022,0.0
+Chicago,Winter,Night,4.5,280,-12,70,150,F,0,1022,0.0
+Houston,Summer,Day,3.2,135,35,65,1900,B,900,1012,0.0
+Houston,Summer,Night,1.8,150,26,80,320,E,0,1012,0.0
+Houston,Winter,Day,3.5,180,18,70,1300,C,600,1015,0.0
+Houston,Winter,Night,2.2,200,10,85,220,E,0,1015,0.0
+Phoenix,Summer,Day,3.8,225,42,20,2200,B,950,1005,0.0
+Phoenix,Summer,Night,2.5,240,30,35,400,D,0,1005,0.0
+Phoenix,Winter,Day,3.2,180,20,40,1400,C,700,1013,0.0
+Phoenix,Winter,Night,2.0,200,8,55,250,E,0,1013,0.0
+Seattle,Summer,Day,3.5,315,22,60,1500,C,650,1012,0.0
+Seattle,Summer,Night,2.2,330,14,75,280,D,0,1012,0.0
+Seattle,Winter,Day,5.5,200,8,85,900,D,250,1018,2.5
+Seattle,Winter,Night,4.0,210,4,90,220,F,0,1018,1.5
+Denver,Summer,Day,4.5,225,32,35,2000,B,880,850,0.0
+Denver,Summer,Night,2.8,240,18,50,350,D,0,850,0.0
+Denver,Winter,Day,4.0,270,-2,45,1000,D,600,850,0.0
+Denver,Winter,Night,2.5,280,-10,55,200,E,0,850,0.0
+
+=== PASQUILL-GIFFORD DISPERSION PARAMETERS ===
+Stability_Class,Description,a_y,c_y,d_y,f_y,a_z,c_z,d_z,f_z,Min_Mixing_Height_Day_m,Max_Mixing_Height_Day_m
+A,Very_Unstable,213,440.8,1.941,9.27,851.9,1.053,459.7,0.801,1500,2500
+B,Moderately_Unstable,156,106.6,1.149,3.3,383.2,0.602,108.2,1.098,1200,2000
+C,Slightly_Unstable,104,61.0,0.911,0,267.3,0.584,61.0,0.911,1000,1500
+D,Neutral,68,33.2,0.725,-1.7,181.1,0.566,33.2,0.725,800,1200
+E,Slightly_Stable,50.5,22.8,0.678,-1.3,110.5,0.499,22.8,0.678,400,800
+F,Moderately_Stable,34,14.35,0.740,-0.35,65.4,0.386,14.35,0.740,100,400
