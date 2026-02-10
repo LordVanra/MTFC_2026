@@ -87,9 +87,9 @@ simulate_model <- function(state_0, policy, years, params) {
   # Handle constant vs time-varying policy
   if (is.vector(policy) && !is.data.frame(policy)) {
     # Constant policy
-    policy_r <- rep(policy["r"], years)
-    policy_s <- rep(policy["s"], years)
-    policy_i <- rep(policy["i"], years)
+    policy_r <- rep(as.numeric(policy["r"]), years)
+    policy_s <- rep(as.numeric(policy["s"]), years)
+    policy_i <- rep(as.numeric(policy["i"]), years)
   } else {
     # Time-varying policy
     policy <- as.data.frame(policy)
@@ -109,7 +109,7 @@ simulate_model <- function(state_0, policy, years, params) {
   # Time loop
   for (t in 1:years) {
     # Current policy
-    u_t <- c(r = policy_r[t], s = policy_s[t], i = policy_i[t])
+    u_t <- c(r = as.numeric(policy_r[t]), s = as.numeric(policy_s[t]), i = as.numeric(policy_i[t]))
     
     # Step forward
     next_state <- step_model(current, u_t, params)
@@ -125,7 +125,7 @@ simulate_model <- function(state_0, policy, years, params) {
     out$i[t + 1] <- u_t["i"]
     
     # Update state
-    current <- c(A = next_state["A"], C = next_state["C"], I = next_state["I"])
+    current <- next_state[c("A", "C", "I")]
   }
   
   return(out)
@@ -233,7 +233,7 @@ generate_synthetic_data <- function(n = 100, params) {
 
 estimate_parameters <- function(data) {
   model <- glm(adoption ~ price_adv + infrastructure, data = data,
-               family = binomial(link = "logit"))
+               family = quasibinomial(link = "logit"))
   coefs <- coef(model)
   list(beta_0 = coefs[1], beta_r = coefs[2], beta_i = coefs[3], model = model)
 }
@@ -339,24 +339,24 @@ cat(sprintf("   beta_i: True = %.3f, Est = %.3f\n\n", params$beta_i, est_params$
 
 cat("GENERATING PLOTS\n")
 
-# # Plot 1: Baseline trajectory
-# cat("Plot 1: Baseline state trajectories\n")
-# plot_all_states(results_baseline)
+# Plot 1: Baseline trajectory
+cat("Plot 1: Baseline state trajectories\n")
+plot_all_states(results_baseline)
 
-# # Plot 2: Scenario comparison
-# cat("Plot 2: Policy scenario comparison\n")
-# dev.new()
-# plot_scenarios(scenarios, labels)
+# Plot 2: Scenario comparison
+cat("Plot 2: Policy scenario comparison\n")
+dev.new()
+plot_scenarios(scenarios, labels)
 
-# # Plot 3: Monte Carlo uncertainty
-# cat("Plot 3: Monte Carlo uncertainty bands\n")
-# dev.new()
-# plot_monte_carlo(mc_sims, results_baseline)
+# Plot 3: Monte Carlo uncertainty
+cat("Plot 3: Monte Carlo uncertainty bands\n")
+dev.new()
+plot_monte_carlo(mc_sims, results_baseline)
 
-# # Plot 4: Sensitivity analysis
-# cat("Plot 4: Sensitivity to rebate effectiveness\n")
-# dev.new()
-# plot_sensitivity(sens_beta_r, "beta_r")
+# Plot 4: Sensitivity analysis
+cat("Plot 4: Sensitivity to rebate effectiveness\n")
+dev.new()
+plot_sensitivity(sens_beta_r, "beta_r")
 
 # PART 9: EXPORT RESULTS
 
