@@ -1,0 +1,165 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+###############################
+# Data cleaning and source term
+###############################
+import io
+with open('combined_data (2).csv', 'r', errors='ignore') as f:
+    content = f.read()
+start = content.find('=== EMISSION FACTORS ===')
+end = content.find('===', start + 1)
+table_text = content[start + len('=== EMISSION FACTORS ==='):end]
+em_df = pd.read_csv(io.StringIO(table_text.strip()))
+
+# Convert pollutant columns to numeric and compute g/m and g/(m·s) assuming v=15 m/s
+pollutants = ['PM2.5', 'NOx', 'CO2']
+for p in pollutants:
+    col_km = f'{p}_g_per_km'
+    em_df[col_km] = pd.to_numeric(em_df[col_km], errors='coerce')
+    em_df[f'{p}_g_per_m'] = em_df[col_km] / 1000.0
+    em_df[f'{p}_g_per_m_per_s'] = em_df[f'{p}_g_per_m'] / 15.0  # 15 m/s speed
+
+# Define emission rate for a chosen vehicle type (e.g. heavy‑duty diesel)
+vehicle = 'Heavy_Duty_Diesel'
+E_PM25 = em_df.loc[em_df['Vehicle_Type'] == vehicle, 'PM2.5_g_per_m_per_s'].values[0]
+
+#########################################
+# 1D advection–diffusion solver (FTCS)
+#########################################
+def solve_1d(u, D, k_dep, source_region, length=2000.0, dx=5.0, dt=0.02, T=1800.0):
+    """Simulate concentration along a road segment of given length (m).
+    u: wind speed (m/s);
+    D: diffusion coefficient (m²/s);
+    k_dep: deposition rate constant (s⁻¹);
+    source_region: tuple (x_start, x_end) where emissions occur;
+    returns x grid and concentration matrix (time × space)."""
+    nx = int(length / dx) + 1
+    nt = int(T / dt)
+    x = np.linspace(0, length, nx)
+    C = np.zeros((nt, nx))
+    # Create source array (g m⁻³ s⁻¹); convert line source to volume by dividing by dx
+    S = np.zeros(nx)
+    mask = (x >= source_region[0]) & (x <= source_region[1])
+    S[mask] = E_PM25 / dx  # emission per cell volume
+    # Time stepping
+    for n in range(nt - 1):
+        Cn = C[n].copy()
+        adv = -u * dt / (2 * dx) * (np.roll(Cn, -1) - np.roll(Cn, 1))
+        diff = D * dt / (dx**2) * (np.roll(Cn, -1) - 2 * Cn + np.roll(Cn, 1))
+        C[n + 1] = Cn + adv + diff + S * dt - k_dep * Cn * dt
+        # Enforce zero concentration at boundaries (open boundaries)
+        C[n + 1, 0] = 0.0
+        C[n + 1, -1] = 0.0
+    return x, C
+
+# Example simulation
+u = 3.5             # m/s (typical wind speed)
+D = 300.0           # m²/s (horizontal diffusion)
+k_dep = 3e-5        # s⁻¹ deposition rate
+source_region = (0.0, 100.0)  # first 100 m is the emission region
+x, C = solve_1d(u, D, k_dep, source_region)
+
+# Plot final concentration profile
+plt.figure()
+plt.plot(x / 1000, C[-1], label='t = 30 min')
+plt.xlabel('Distance from source (km)')
+plt.ylabel('Concentration (g m⁻³)')
+plt.title('1D PM₂.₅ concentration profile after 30 min')
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.savefig('pm25_1d.png', dpi=300)
+
+#########################################
+# 2D advection–diffusion solver
+#########################################
+def solve_2d(u, w, D_h, D_z, k_dep, source_region_x, z_domain=(0, 50), x_domain=(0, 300),
+            dx=5.0, dz=1.0, dt=0.05, T=120.0):
+    """Simulate 2D concentration in (x,z) cross‑section.
+    source_region_x: tuple defining x‑range of emissions at ground level.
+    Returns x, z grids and concentration at final time."""
+    nx = int(x_domain[1] / dx) + 1
+    nz = int((z_domain[1] - z_domain[0]) / dz) + 1
+    nt = int(T / dt)
+    x = np.linspace(x_domain[0], x_domain[1], nx)
+    z = np.linspace(z_domain[0], z_domain[1], nz)
+    C = np.zeros((nz, nx))
+    # Source at ground (z index 0)
+    S = np.zeros((nz, nx))
+    mask = (x >= source_region_x[0]) & (x <= source_region_x[1])
+    S[0, mask] = E_PM25 / (dx * dz)  # convert line source to per volume
+    for n in range(nt):
+        Cn = C.copy()
+        # Advection: upwind differences in x and z
+        adv_x = -u * dt / (2 * dx) * (np.roll(Cn, -1, axis=1) - np.roll(Cn, 1, axis=1))
+        adv_z = -w * dt / (2 * dz) * (np.roll(Cn, -1, axis=0) - np.roll(Cn, 1, axis=0))
+        # Diffusion
+        diff_x = D_h * dt / (dx**2) * (np.roll(Cn, -1, axis=1) - 2 * Cn + np.roll(Cn, 1, axis=1))
+        diff_z = D_z * dt / (dz**2) * (np.roll(Cn, -1, axis=0) - 2 * Cn + np.roll(Cn, 1, axis=0))
+        C = Cn + adv_x + adv_z + diff_x + diff_z + S * dt - k_dep * Cn * dt
+        # Boundary conditions: zero at far right, reflective at ground and top
+        C[:, 0] = 0.0
+        C[:, -1] = 0.0
+        C[0, :] = C[1, :]
+        C[-1, :] = C[-2, :]
+    return x, z, C
+
+# Run 2D simulation
+x2, z2, C2 = solve_2d(u=3.5, w=0.1, D_h=300.0, D_z=30.0, k_dep=k_dep,
+                     source_region_x=(0.0, 100.0))
+
+# Plot heatmap
+plt.figure()
+X, Z = np.meshgrid(x2, z2)
+plt.pcolormesh(X, Z, C2, shading='auto', cmap='plasma')
+plt.colorbar(label='Concentration (g m⁻³)')
+plt.xlabel('Downwind distance (m)')
+plt.ylabel('Height (m)')
+plt.title('2D PM₂.₅ plume after 2 min')
+plt.tight_layout()
+plt.savefig('pm25_2d_heatmap.png', dpi=300)
+
+# Plot vertical profile at x ≈ 170 m
+ix = int(170 / 5)
+plt.figure()
+plt.plot(C2[:, ix], z2)
+plt.xlabel('Concentration (g m⁻³)')
+plt.ylabel('Height (m)')
+plt.title('Vertical concentration profile at x ≈ 170 m')
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.savefig('pm25_2d_profile.png', dpi=300)
+
+###############################
+# Sensitivity analysis
+###############################
+wind_speeds = [1.0, 3.5, 6.0]
+diff_coeffs = [100.0, 300.0, 600.0]
+peak_vs_wind = []
+for uval in wind_speeds:
+    x_tmp, C_tmp = solve_1d(uval, D, k_dep, source_region)
+    peak_vs_wind.append(C_tmp[-1].max())
+peak_vs_diff = []
+for Dval in diff_coeffs:
+    x_tmp, C_tmp = solve_1d(u, Dval, k_dep, source_region)
+    peak_vs_diff.append(C_tmp[-1].max())
+
+plt.figure()
+plt.plot(wind_speeds, peak_vs_wind, 'o-')
+plt.xlabel('Wind speed u (m/s)')
+plt.ylabel('Peak concentration (g m⁻³)')
+plt.title('Sensitivity: peak vs wind speed')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('sensitivity_peak_vs_wind.png', dpi=300)
+
+plt.figure()
+plt.plot(diff_coeffs, peak_vs_diff, 'o-')
+plt.xlabel('Diffusion coefficient D (m²/s)')
+plt.ylabel('Peak concentration (g m⁻³)')
+plt.title('Sensitivity: peak vs diffusion coefficient')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('sensitivity_peak_vs_diff.png', dpi=300)
