@@ -37,7 +37,7 @@ step_model <- function(state, policy, params) {
   a_uncapped <- sigmoid(params$beta_0 + params$beta_1 * price_adv + params$beta_2 * I_i)
   
   # Supply constraint
-  cap <- params$cap_0 + params$gamma * s
+  cap <- params$cap_0 + params$gamma * s + k_i
   K_iPlus1 <- max(0, min(1, (k_i + params$gamma * s + sigmoid(k_i))))
   a <- min(a_uncapped, cap)
   
