@@ -1,7 +1,7 @@
 params <- list(
   delta_1 = 0.07,        # annual vehicle retirement rate (7%)
   delta_2 = 0.05,          # infrastructure depreciation rate (5%)
-  S = 15e6,            # annual new car sales (15 million)
+  S = 350000,            # annual new car sales (15 million)
   Price_AV = 40000,        # average AV price ($40k)
   
   beta_0 = -2.026,       # baseline (intercept)
@@ -12,7 +12,7 @@ params <- list(
   gamma = 0.00002      # subsidy effectiveness on capacity
 )
 
-# This might need to be some form of static param because the same thing is used in 3 different places , but thats up to Tanay
+# This might need to be some form of static param because the same thing is used in 3 different places, but thats up to Tanay
 sigmoid <- function(z) {
   1 / (1 + exp(-z))
 }
@@ -29,8 +29,12 @@ step_model <- function(state, policy, params) {
   i <- as.numeric(policy["i"])  # infrastructure spending
   
   # Infrastructure dynamics
-  I_iPlus1 <- (1 - params$delta_2) * I_i + i
-  I_scaled <- sigmoid(I_iPlus1)
+  I_iPlus1   <- (1 - params$delta_2) * I_i + i
+  I_scaled   <- sigmoid(I_iPlus1)
+
+  # Adoption (demand-side)
+  price_adv  <- r / params$Price_AV
+  a_uncapped <- sigmoid(params$beta_0 + params$beta_1 * price_adv + params$beta_2 * I_scaled)
   
   # Adoption fraction (demand-side)
   price_adv <- r / params$Price_AV

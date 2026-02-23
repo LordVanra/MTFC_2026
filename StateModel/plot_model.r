@@ -8,8 +8,9 @@ library(ggridges)
 params <- list(
   delta_1  = 0.07,
   delta_2  = 0.05,
-  S        = 15e6,
+  S        = 26970,
   Price_AV = 40000,
+  I_ref    = 66214286,
   beta_0   = -2.026,
   beta_1   =  3.250,
   beta_2   =  3.997,
@@ -28,8 +29,9 @@ step_model <- function(state, policy, params) {
   s   <- as.numeric(policy["s"])
   i   <- as.numeric(policy["i"])
   I_iPlus1   <- (1 - params$delta_2) * I_i + i
+  I_scaled <- sigmoid(5 * (log(I_iPlus1) / log(params$I_ref) - 0.5))
   price_adv  <- r / params$Price_AV
-  a_uncapped <- sigmoid(params$beta_0 + params$beta_1 * price_adv + params$beta_2 * I_i)
+  a_uncapped <- sigmoid(params$beta_0 + params$beta_1 * price_adv + params$beta_2 * I_scaled)
   cap        <- params$cap_0 + params$gamma * s + k_i
   K_iPlus1   <- max(0, min(1, k_i + params$gamma * s + sigmoid(k_i)))
   a          <- min(a_uncapped, cap)
@@ -226,9 +228,9 @@ plot_heatmap <- function(scenarios, labels) {
 plot_demand_vs_supply <- function(scenarios, labels) {
   df <- combined_scenarios(scenarios, labels) %>%
     mutate(
-      demand  = pmin(sigmoid(params$beta_0 + params$beta_1 * (r / params$Price_AV) + params$beta_2 * I), 1),
-      supply  = params$cap_0 + params$gamma * s + K,
-      binding = ifelse(adoption < demand * 0.999, "Supply Constrained", "Demand Limited")
+      I_scaled = sigmoid(5 * (log(pmax(I, 1)) / log(params$I_ref) - 0.5)),
+      demand   = pmin(sigmoid(params$beta_0 + params$beta_1 * (r / params$Price_AV) + params$beta_2 * I_scaled), 1),
+      binding  = ifelse(adoption < demand * 0.999, "Supply Constrained", "Demand Limited")
     )
 
   n_scen <- length(unique(df$scenario))
@@ -310,21 +312,21 @@ plot_phase_portrait <- function(scenarios, labels) {
   df <- combined_scenarios(scenarios, labels)
   arrows_df <- df %>%
     group_by(scenario) %>%
-    mutate(xend = lead(I * 100), yend = lead(pct_AV * 100)) %>%
+    mutate(xend = lead(I / 1e6), yend = lead(pct_AV * 100)) %>%
     filter(!is.na(xend), year %% 3 == 0)
 
-  ggplot(df, aes(x = I * 100, y = pct_AV * 100, color = scenario)) +
+  ggplot(df, aes(x = I / 1e6, y = pct_AV * 100, color = scenario)) +
     geom_path(linewidth = 0.9, alpha = 0.7) +
     geom_segment(data = arrows_df, aes(xend = xend, yend = yend),
                  arrow = arrow(length = unit(0.10, "cm"), type = "closed"), linewidth = 0.5) +
     geom_point(data = filter(df, year == 0),  size = 2.5, shape = 21, fill = "white", stroke = 1.5) +
     geom_point(data = filter(df, year == 30), size = 2.5, shape = 24, fill = "white", stroke = 1.5) +
     scale_color_manual(values = COLORS) +
-    scale_x_continuous(labels = function(x) paste0(x, "%")) +
+    scale_x_continuous(labels = function(x) paste0("$", x, "M")) +
     scale_y_continuous(labels = function(x) paste0(x, "%")) +
     labs(title = "Phase Portrait: Infrastructure vs. AV Adoption",
          subtitle = "Trajectory through state space — circle = start, triangle = year 30",
-         x = "Infrastructure Level (%)", y = "AV Market Share (%)") +
+         x = "Infrastructure Stock ($M)", y = "AV Market Share (%)") +
     theme_clean() +
     theme(legend.text = element_text(size = 8))
 }
@@ -334,18 +336,18 @@ plot_policy_controls <- function(tv_scenarios, tv_labels) {
   df <- do.call(rbind, lapply(seq_along(tv_scenarios), function(i) {
     d <- tv_scenarios[[i]]
     data.frame(
-      year     = d$year,
-      scenario = tv_labels[i],
-      Rebate   = d$r,
-      Infra_Inv = d$i * 100,
+      year      = d$year,
+      scenario  = tv_labels[i],
+      Rebate    = d$r,
+      Infra_Inv = d$i / 1e6,
       Infra_Sp  = d$s
     )
   })) %>%
     pivot_longer(c(Rebate, Infra_Inv, Infra_Sp), names_to = "control", values_to = "value") %>%
     mutate(control = recode(control,
                             Rebate    = "Rebate ($/vehicle)",
-                            Infra_Inv = "Infra Investment rate (×100)",
-                            Infra_Sp  = "Infra Spending (s)"))
+                            Infra_Inv = "Infra Investment ($M/year)",
+                            Infra_Sp  = "Manufacturer Subsidy ($)"))
 
   df$scenario <- factor(df$scenario, levels = tv_labels)
 
@@ -363,7 +365,7 @@ plot_policy_controls <- function(tv_scenarios, tv_labels) {
 plot_total_spend <- function(scenarios, labels) {
   df <- combined_scenarios(scenarios, labels) %>%
     filter(year > 0) %>%
-    mutate(annual_spend = r * (adoption * params$S) + s + i * params$S * params$Price_AV / 1000) %>%
+    mutate(annual_spend = r * (adoption * params$S) + s + i) %>%
     group_by(scenario) %>%
     mutate(cumulative_spend = cumsum(annual_spend) / 1e9) %>%
     ungroup()
@@ -427,66 +429,59 @@ plot_spend_per_av <- function(scenarios, labels) {
                  linewidth = 0.35, alpha = 0.6, show.legend = FALSE) +
     geom_text(data = ends,
               aes(x = 31.4, y = label_y,
-                  label = paste0(scenario, "  $", formatC(round(spend_per_av), format = "d", big.mark = ","))),
+                  label = paste0(scenario, "  $", ifelse(is.na(spend_per_av), "N/A", 
+               paste0(round(spend_per_av / 1e6, 1), "M")))),
               hjust = 0, size = 2.7, fontface = "bold", show.legend = FALSE) +
     scale_color_manual(values = COLORS) +
     scale_x_continuous(breaks = c(0, 5, 10, 15, 20, 25, 30),
                        expand = expansion(mult = c(0.01, 0.0))) +
     coord_cartesian(xlim = c(0, 52)) +
-    scale_y_continuous(labels = dollar_format()) +
+    scale_y_continuous(labels = function(x) paste0("$", round(x / 1e6), "M")) +
     labs(title = "Cumulative Spend per Autonomous Vehicle",
          subtitle = "Total policy dollars spent divided by AV fleet size — policy efficiency metric",
-         x = "Year", y = "Spend per AV ($)") +
+         x = "Year", y = "Spend per AV ($M)") +
     theme_clean() +
     theme(legend.position = "none")
 }
 
-state_0 <- c(A = 10e6, C = 250e6, I = 0.30, K = 0.20)
+state_0 <- c(A = 98, C = 512539, I = 6983872, K = 0.01)
 
-policy_none        <- c(r =     0, s =    0, i = 0.00)
-policy_high_rebate <- c(r = 10000, s =  500, i = 0.05)
-policy_infra       <- c(r =  1000, s =  500, i = 0.15)
-policy_aggressive  <- c(r = 12000, s = 5000, i = 0.20)
-
-# Moderate Rebate: middle ground — meaningful incentive but not maximal
-policy_moderate_rebate <- c(r = 5000, s = 1000, i = 0.08)
-
-# Supply Push: zero consumer rebate, all spending goes to manufacturer/infra capacity
-policy_supply_push <- c(r = 0, s = 8000, i = 0.18)
+policy_none            <- c(r =     0, s =    0, i =      0)
+policy_high_rebate     <- c(r = 10000, s =  500, i =   5e6)
+policy_infra           <- c(r =  1000, s =  500, i =  20e6)
+policy_aggressive      <- c(r = 12000, s = 5000, i =  40e6)
+policy_moderate_rebate <- c(r =  5000, s = 1000, i =  10e6)
+policy_supply_push     <- c(r =     0, s = 8000, i =  30e6)
 
 policy_phaseout <- data.frame(
-  r = seq(10000, 0,   length.out = 30),
-  s = rep(3000,       30),
-  i = seq(0.15, 0.05, length.out = 30)
+  r = seq(10000, 0,    length.out = 30),
+  s = rep(3000,        30),
+  i = seq(20e6, 5e6,   length.out = 30)
 )
-
-# Ramp-Up: starts small, accelerates aggressively in second half
 policy_rampup <- data.frame(
-  r = c(seq(0, 6000, length.out = 15), seq(6000, 14000, length.out = 15)),
-  s = c(seq(0, 2000, length.out = 15), seq(2000, 7000,  length.out = 15)),
-  i = c(seq(0.02, 0.10, length.out = 15), seq(0.10, 0.25, length.out = 15))
+  r = c(seq(0, 6000,   length.out = 15), seq(6000, 14000,  length.out = 15)),
+  s = c(seq(0, 2000,   length.out = 15), seq(2000, 7000,   length.out = 15)),
+  i = c(seq(2e6, 10e6, length.out = 15), seq(10e6, 40e6,   length.out = 15))
 )
 
 # Pulse: two intensive 5-year bursts separated by low-activity gaps
 pulse_r <- c(rep(12000, 5), rep(1000, 5), rep(12000, 5), rep(1000, 5), rep(3000, 10))
 pulse_s <- c(rep(5000,  5), rep(500,  5), rep(5000,  5), rep(500,  5), rep(1500, 10))
-pulse_i <- c(rep(0.20,  5), rep(0.03, 5), rep(0.20,  5), rep(0.03, 5), rep(0.08, 10))
+pulse_i <- c(rep(30e6, 5), rep(2e6, 5), rep(30e6, 5), rep(2e6, 5), rep(10e6, 10))
 policy_pulse <- data.frame(r = pulse_r, s = pulse_s, i = pulse_i)
 
-# Adaptive: rebate tied inversely to current-share proxy (simulated feedback)
-# Rebate shrinks as adoption expected to grow; infra ramps up steadily
 policy_adaptive <- data.frame(
   r = pmax(0, 10000 - 10000 * ((1:30) / 30)^1.5),
-  s = seq(1000, 6000, length.out = 30),
-  i = pmin(0.25, 0.05 + 0.008 * (1:30))
+  s = seq(1000, 6000,  length.out = 30),
+  i = pmin(40e6, 5e6 + 1.2e6 * (1:30))
+)
+policy_frontloaded <- data.frame(
+  r = c(seq(15000, 2000, length.out = 15), rep(500,  15)),
+  s = c(seq(8000,   500, length.out = 15), rep(200,  15)),
+  i = c(seq(40e6,  5e6, length.out = 15), rep(2e6,  15))
 )
 
-# Front-Loaded: massive early push, then coast — opposite of ramp-up
-policy_frontloaded <- data.frame(
-  r = c(seq(15000, 2000, length.out = 15), rep(500, 15)),
-  s = c(seq(8000,  500,  length.out = 15), rep(200, 15)),
-  i = c(seq(0.25,  0.05, length.out = 15), rep(0.02, 15))
-)
+
 
 results_none           <- simulate_model(state_0, policy_none,           30, params)
 results_high_rebate    <- simulate_model(state_0, policy_high_rebate,    30, params)
