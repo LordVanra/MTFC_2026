@@ -4,9 +4,9 @@ params <- list(
   S = 15e6,            # annual new car sales (15 million)
   Price_AV = 40000,        # average AV price ($40k)
   
-  beta_0 = -2.0,       # baseline (intercept)
-  beta_1 = 3.0,        # rebate sensitivity
-  beta_2 = 4.0,        # infrastructure sensitivity
+  beta_0 = -2.026,       # baseline (intercept)
+  beta_1 =  3.250,       # rebate sensitivity
+  beta_2 =  3.997,       # infrastructure sensitivity
   
   cap_0 = 0.20,        # baseline production capacity (20% of sales)
   gamma = 0.00002      # subsidy effectiveness on capacity

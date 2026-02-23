@@ -1,0 +1,592 @@
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+
+load_emission_factors <- function(filepath) {
+  data <- fread(filepath)
+  for (p in c("PM2.5", "NOx", "CO2")) {
+    col <- paste0(p, "_g_per_km")
+    if (!col %in% names(data)) stop(paste("Missing column:", col))
+    data[[col]] <- as.numeric(data[[col]])
+  }
+  return(data)
+}
+
+get_pm25_per_km <- function(emission_data, vehicle_type, is_av) {
+  if (is_av) {
+    row <- emission_data[Vehicle_Type == "Autonomous_EV_Lifecycle"]
+  } else {
+    row <- emission_data[Vehicle_Type == vehicle_type]
+  }
+  if (nrow(row) == 0) stop(paste("Vehicle type not found:", vehicle_type))
+  return(row$PM2.5_g_per_km)
+}
+
+load_flow_matrix <- function(filepath) {
+  raw <- fread(filepath, header = TRUE, check.names = FALSE)
+  cell_ids <- as.character(raw[[1]])
+  mat_data <- raw[, -1, with = FALSE]
+  if (ncol(mat_data) != nrow(mat_data)) {
+    raw <- fread(filepath, header = FALSE, skip = 1)
+    cell_ids <- as.character(raw[[1]])
+    mat_data <- raw[, -1, with = FALSE]
+  }
+  mat <- as.matrix(mat_data)
+  nr <- nrow(mat); nc <- ncol(mat)
+  rownames(mat) <- cell_ids[seq_len(nr)]
+  colnames(mat) <- cell_ids[seq_len(nc)]
+  mat[is.na(mat)] <- 0
+  mat[mat < 0]    <- 0
+  return(mat)
+}
+
+load_distance_matrix <- function(filepath) {
+  raw <- fread(filepath)
+  cell_ids <- as.character(raw[[1]])
+  mat <- as.matrix(raw[, -1, with = FALSE])
+  rownames(mat) <- cell_ids
+  colnames(mat) <- cell_ids
+  mat[is.na(mat)] <- 0
+  mat[mat < 0]    <- 0
+  return(mat)
+}
+
+solve_2d <- function(u = 3.5, w = 0.1, D_h = 50, D_z = 10, k_dep = 3e-5,
+                     E_eff, road_length_m,
+                     z_domain = c(0, 100), x_domain = c(0, 1000),
+                     dx = 5, dz = 1, T = 600) {
+
+  source_region_x <- c(0, min(road_length_m, x_domain[2]))
+  nx <- as.integer((x_domain[2] - x_domain[1]) / dx) + 1
+  nz <- as.integer((z_domain[2] - z_domain[1]) / dz) + 1
+  x  <- seq(x_domain[1], x_domain[2], length.out = nx)
+  z  <- seq(z_domain[1], z_domain[2], length.out = nz)
+  dt <- min(dx / u * 0.9, 0.5 / (D_h/dx^2 + D_z/dz^2) * 0.9)
+  nt <- as.integer(T / dt)
+  C <- matrix(0, nrow = nz, ncol = nx)
+  S <- matrix(0, nrow = nz, ncol = nx)
+  mask <- (x >= source_region_x[1]) & (x <= source_region_x[2])
+  S[1, mask] <- E_eff / dz
+
+  for (n in seq_len(nt)) {
+    Cn     <- C
+    adv_x  <- -u  * dt / (2*dx) * (cbind(Cn[, 2:nx], Cn[, nx]) - cbind(Cn[, 1], Cn[, 1:(nx-1)]))
+    adv_z  <- -w  * dt / (2*dz) * (rbind(Cn[2:nz,], Cn[nz,]) - rbind(Cn[1,], Cn[1:(nz-1),]))
+    diff_x <- D_h * dt / dx^2   * (cbind(Cn[, 2:nx], Cn[, nx]) - 2*Cn + cbind(Cn[, 1], Cn[, 1:(nx-1)]))
+    diff_z <- D_z * dt / dz^2   * (rbind(Cn[2:nz,], Cn[nz,]) - 2*Cn + rbind(Cn[1,], Cn[1:(nz-1),]))
+    C <- Cn + adv_x + adv_z + diff_x + diff_z + S * dt - k_dep * Cn * dt
+    C[, 1]      <- 0
+    C[, nx]     <- C[, nx-1]
+    C[1, !mask] <- C[2, !mask]
+    C[nz, ]     <- 0
+    C[C < 0]    <- 0
+  }
+
+  list(x = x, z = z, C = C,
+       ground_max  = max(C[1, ]),
+       domain_max  = max(C),
+       ground_mean = mean(C[1, C[1,] > 0]))
+}
+
+run_scenario <- function(flow_matrix, dist_matrix, av_fraction,
+                         emission_data, vehicle_type = "Passenger_Car_Gasoline",
+                         months_to_seconds = 30 * 24 * 3600) {
+
+  pm25_normal <- get_pm25_per_km(emission_data, vehicle_type, is_av = FALSE)
+  pm25_av     <- get_pm25_per_km(emission_data, vehicle_type, is_av = TRUE)
+  cell_ids <- rownames(flow_matrix)
+  results  <- list()
+
+  for (i in seq_along(cell_ids)) {
+    for (j in seq_along(cell_ids)) {
+      total_veh <- flow_matrix[i, j]
+      if (total_veh == 0) next
+      dist_km <- dist_matrix[cell_ids[i], cell_ids[j]]
+      if (is.na(dist_km) || dist_km == 0) next
+      n_av     <- total_veh * av_fraction
+      n_normal <- total_veh * (1 - av_fraction)
+      veh_per_s_av     <- n_av     / months_to_seconds
+      veh_per_s_normal <- n_normal / months_to_seconds
+      E_eff <- (pm25_normal * veh_per_s_normal + pm25_av * veh_per_s_av) / 1000
+      road_length_m <- dist_km * 1000
+      sim <- solve_2d(E_eff = E_eff, road_length_m = road_length_m,
+                dx = 20, dz = 5, T = 300)
+      results[[length(results) + 1]] <- data.frame(
+        origin       = cell_ids[i],
+        destination  = cell_ids[j],
+        dist_km      = dist_km,
+        total_veh    = total_veh,
+        n_av         = n_av,
+        n_normal     = n_normal,
+        av_fraction  = av_fraction,
+        E_eff        = E_eff,
+        ground_max   = sim$ground_max,
+        domain_max   = sim$domain_max,
+        ground_mean  = sim$ground_mean
+      )
+    }
+  }
+
+  do.call(rbind, results)
+}
+
+theme_disp <- function() {
+  theme_minimal(base_size = 11) +
+    theme(
+      plot.background  = element_rect(fill = "#FFFFFF", color = NA),
+      panel.background = element_rect(fill = "#F8F9FA", color = NA),
+      panel.grid.major = element_line(color = "#E2E8F0", linewidth = 0.4),
+      panel.grid.minor = element_blank(),
+      plot.title       = element_text(face = "bold", size = 14, color = "#1A202C",
+                                      margin = margin(b = 4)),
+      plot.subtitle    = element_text(color = "#718096", size = 9,
+                                      margin = margin(b = 10)),
+      axis.text        = element_text(color = "#718096", size = 9),
+      axis.title       = element_text(color = "#1A202C", size = 10),
+      strip.background = element_rect(fill = "#E2E8F0", color = NA),
+      strip.text       = element_text(face = "bold", color = "#1A202C"),
+      legend.background = element_rect(fill = "#F8F9FA", color = NA),
+      legend.title     = element_text(color = "#1A202C"),
+      legend.text      = element_text(color = "#718096"),
+      plot.margin      = margin(14, 14, 14, 14)
+    )
+}
+
+plot_ground_max_heatmap <- function(all_results) {
+  df <- all_results %>%
+    mutate(label = paste0(av_fraction * 100, "% AV"),
+           log_conc = log10(ground_max + 1e-15))
+
+  ggplot(df, aes(x = destination, y = origin, fill = log_conc)) +
+    geom_tile(color = "#E2E8F0", linewidth = 0.3) +
+    scale_fill_gradientn(
+      colors   = c("#F0F9FF", "#90CDF4", "#3182CE", "#C53030"),
+      na.value = "#F8F9FA",
+      name     = "Ground PM2.5\n(log10 g/m3)",
+      guide    = guide_colorbar(barwidth = 0.8, barheight = 12)
+    ) +
+    facet_wrap(~label) +
+    labs(title    = "Ground-Level Peak PM2.5 by Flow Pair",
+         subtitle = "Each cell = one origin - destination corridor, color = peak ground concentration",
+         x = "Destination", y = "Origin") +
+    theme_disp() +
+    theme(axis.text.x = element_text(angle = 55, hjust = 1, size = 7),
+          axis.text.y = element_text(size = 7),
+          panel.grid  = element_blank())
+}
+
+plot_network_burden <- function(all_results) {
+  df <- all_results %>%
+    group_by(av_fraction) %>%
+    summarise(
+      total_ground_max  = sum(ground_max),
+      total_emission    = sum(E_eff),
+      mean_ground       = mean(ground_max),
+      .groups = "drop"
+    ) %>%
+    mutate(label = paste0(av_fraction * 100, "% AV"),
+           label = factor(label, levels = label))
+
+  baseline <- df$total_emission[which.min(df$av_fraction)]
+  df$pct_reduction <- (1 - df$total_emission / baseline) * 100
+
+  ggplot(df, aes(x = label, y = total_emission, fill = av_fraction)) +
+    geom_col(width = 0.6, alpha = 0.9) +
+    geom_text(aes(label = paste0("-", round(pct_reduction, 1), "%")),
+              vjust = -0.5, fontface = "bold", color = "#1A202C", size = 3.5) +
+    scale_fill_gradientn(colors = c("#3182CE", "#276749"), guide = "none") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    labs(title    = "Total Network Emission Rate by AV Scenario",
+         subtitle = "Sum of E_eff across all active flow corridors, % = reduction vs lowest AV scenario",
+         x = "Scenario", y = "Total E_eff (g/m/s)") +
+    theme_disp()
+}
+
+plot_corridor_av_benefit <- function(all_results) {
+  baseline_frac <- min(all_results$av_fraction)
+  baseline_df <- all_results %>%
+    filter(av_fraction == baseline_frac) %>%
+    select(origin, destination, ground_max_base = ground_max, dist_km, total_veh)
+
+  df <- all_results %>%
+    filter(av_fraction != baseline_frac) %>%
+    left_join(baseline_df, by = c("origin", "destination", "dist_km", "total_veh")) %>%
+    mutate(
+      pct_reduction = (1 - ground_max / ground_max_base) * 100,
+      label = paste0(av_fraction * 100, "% AV")
+    )
+
+  ggplot(df, aes(x = dist_km, y = pct_reduction, color = log10(total_veh + 1),
+                 size = total_veh)) +
+    geom_point(alpha = 0.75) +
+    scale_color_gradientn(
+      colors = c("#3182CE", "#D97706", "#C53030"),
+      name   = "Volume\n(log10 veh)"
+    ) +
+    scale_size_continuous(range = c(1, 6), guide = "none") +
+    facet_wrap(~label) +
+    labs(title    = "PM2.5 Reduction by Corridor vs Baseline",
+         subtitle = "Each point = one flow pair, x = distance, y = % reduction in ground-level PM2.5, size = volume",
+         x = "Corridor Distance (km)", y = "% PM2.5 Reduction") +
+    theme_disp()
+}
+
+plot_busiest_plume <- function(flow_matrix, dist_matrix, av_splits,
+                               emission_data, vehicle_type = "Passenger_Car_Gasoline") {
+
+  pm25_normal <- get_pm25_per_km(emission_data, vehicle_type, is_av = FALSE)
+  pm25_av     <- get_pm25_per_km(emission_data, vehicle_type, is_av = TRUE)
+
+  idx     <- which(flow_matrix == max(flow_matrix), arr.ind = TRUE)
+  orig    <- rownames(flow_matrix)[idx[1,1]]
+  dest    <- colnames(flow_matrix)[idx[1,2]]
+  total   <- flow_matrix[idx[1,1], idx[1,2]]
+  dist_km <- dist_matrix[orig, dest]
+
+  plume_list <- list()
+  for (av_frac in av_splits) {
+    veh_per_s_av     <- (total * av_frac)     / (30 * 24 * 3600)
+    veh_per_s_normal <- (total * (1-av_frac)) / (30 * 24 * 3600)
+    E_eff <- (pm25_normal * veh_per_s_normal + pm25_av * veh_per_s_av) / 1000
+    sim <- solve_2d(E_eff = E_eff, road_length_m = dist_km * 1000, dx = 20, dz = 5, T = 300)
+    df_plume <- expand.grid(x = sim$x, z = sim$z)
+    df_plume$conc  <- as.vector(t(sim$C))
+    df_plume$label <- paste0(av_frac * 100, "% AV")
+    plume_list[[length(plume_list) + 1]] <- df_plume
+  }
+
+  df_all <- do.call(rbind, plume_list) %>%
+    mutate(label = factor(label, levels = paste0(sort(av_splits) * 100, "% AV")))
+
+  ggplot(df_all, aes(x = x, y = z, fill = conc)) +
+    geom_raster(interpolate = TRUE) +
+    scale_fill_gradientn(
+      colors = c("#F0F9FF", "#90CDF4", "#3182CE", "#744210", "#C53030"),
+      name   = "PM2.5\n(g/m3)",
+      trans  = "sqrt",
+      guide  = guide_colorbar(barwidth = 0.8, barheight = 12)
+    ) +
+    facet_wrap(~label, ncol = 1) +
+    labs(title    = paste0("PM2.5 Plume - Busiest Corridor (", orig, " - ", dest, ")"),
+         subtitle = paste0(formatC(total, format="f", digits=0, big.mark=","),
+                           " vehicles/month, ", round(dist_km, 1), " km"),
+         x = "Downwind Distance (m)", y = "Height (m)") +
+    theme_disp() +
+    theme(panel.grid = element_blank())
+}
+
+plot_ground_profile <- function(flow_matrix, dist_matrix, av_splits,
+                                emission_data, vehicle_type = "Passenger_Car_Gasoline") {
+
+  pm25_normal <- get_pm25_per_km(emission_data, vehicle_type, is_av = FALSE)
+  pm25_av     <- get_pm25_per_km(emission_data, vehicle_type, is_av = TRUE)
+
+  idx     <- which(flow_matrix == max(flow_matrix), arr.ind = TRUE)
+  orig    <- rownames(flow_matrix)[idx[1,1]]
+  dest    <- colnames(flow_matrix)[idx[1,2]]
+  total   <- flow_matrix[idx[1,1], idx[1,2]]
+  dist_km <- dist_matrix[orig, dest]
+
+  COLORS <- colorRampPalette(c("#3182CE", "#276749"))(length(av_splits))
+
+  profile_list <- list()
+  for (k in seq_along(av_splits)) {
+    av_frac <- av_splits[k]
+    veh_per_s_av     <- (total * av_frac)     / (30 * 24 * 3600)
+    veh_per_s_normal <- (total * (1-av_frac)) / (30 * 24 * 3600)
+    E_eff <- (pm25_normal * veh_per_s_normal + pm25_av * veh_per_s_av) / 1000
+    sim <- solve_2d(E_eff = E_eff, road_length_m = dist_km * 1000, dx = 20, dz = 5, T = 300)
+    profile_list[[k]] <- data.frame(
+      x     = sim$x,
+      conc  = sim$C[1, ],
+      label = paste0(av_frac * 100, "% AV"),
+      color_idx = k
+    )
+  }
+
+  df <- do.call(rbind, profile_list) %>%
+    mutate(label = factor(label, levels = paste0(sort(av_splits) * 100, "% AV")))
+
+  ggplot(df, aes(x = x, y = conc * 1e6, color = label)) +
+    geom_line(linewidth = 1.1, alpha = 0.9) +
+    scale_color_manual(values = COLORS, name = "Scenario") +
+    scale_y_continuous(labels = function(x) paste0(round(x, 2), " ug")) +
+    labs(title    = paste0("Ground-Level PM2.5 Profile - ", orig, " - ", dest),
+         subtitle = "Concentration along downwind axis at z = 0 (street level), converted to ug/m3",
+         x = "Downwind Distance (m)", y = "PM2.5 Concentration (ug/m3)") +
+    theme_disp()
+}
+
+plot_map_emission <- function(all_results, zip_coords) {
+  node_burden <- all_results %>%
+    group_by(zip = origin, av_fraction) %>%
+    summarise(total_E = sum(E_eff), total_veh = sum(total_veh), .groups = "drop") %>%
+    left_join(zip_coords, by = "zip") %>%
+    filter(!is.na(lat)) %>%
+    mutate(label = paste0(av_fraction * 100, "% AV"))
+
+  flow_base <- all_results %>%
+    filter(av_fraction == min(av_fraction)) %>%
+    filter(total_veh > 0) %>%
+    left_join(zip_coords %>% rename(orig_lat = lat, orig_lon = lon), by = c("origin" = "zip")) %>%
+    left_join(zip_coords %>% rename(dest_lat = lat, dest_lon = lon), by = c("destination" = "zip")) %>%
+    filter(!is.na(orig_lat), !is.na(dest_lat))
+
+  ggplot() +
+    geom_segment(data = flow_base,
+                 aes(x = orig_lon, y = orig_lat,
+                     xend = dest_lon, yend = dest_lat,
+                     alpha = log10(total_veh + 1)),
+                 color = "#3182CE", linewidth = 0.4) +
+    scale_alpha_continuous(range = c(0.05, 0.45), guide = "none") +
+    ggnewscale::new_scale("alpha") +
+    geom_point(data = node_burden,
+               aes(x = lon, y = lat, size = total_veh,
+                   fill = total_E * 1e6, alpha = 0.9),
+               shape = 21, color = "#1A202C", stroke = 0.4) +
+    scale_fill_gradientn(
+      colors = c("#EBF8FF", "#90CDF4", "#3182CE", "#C53030"),
+      name   = "E_eff\n(ng/m/s)",
+      trans  = "sqrt"
+    ) +
+    scale_size_continuous(range = c(3, 14), guide = "none") +
+    scale_alpha_continuous(range = c(0.85, 0.95), guide = "none") +
+    geom_text(data = zip_coords,
+              aes(x = lon, y = lat, label = zip),
+              size = 2.2, color = "#2D3748", fontface = "bold",
+              nudge_y = 0.004) +
+    facet_wrap(~label) +
+    coord_fixed(ratio = 1 / cos(mean(zip_coords$lat) * pi / 180)) +
+    labs(title    = "Spatial Distribution of PM2.5 Emission Burden",
+         subtitle = "Node size = outbound vehicle volume, color = total emission rate, lines = corridors (baseline scenario)",
+         x = "Longitude", y = "Latitude") +
+    theme_disp() +
+    theme(panel.grid.major = element_line(color = "#E2E8F0", linewidth = 0.3))
+}
+
+plot_emission_efficiency <- function(all_results) {
+  df <- all_results %>%
+    mutate(
+      dist_bin = cut(dist_km, breaks = c(0, 2, 5, 10, 20, Inf),
+                     labels = c("<2 km", "2-5 km", "5-10 km", "10-20 km", ">20 km"))
+    ) %>%
+    group_by(label = paste0(av_fraction * 100, "% AV"), dist_bin) %>%
+    summarise(
+      mean_E = mean(E_eff * 1e9),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(dist_bin))
+
+  n_scen  <- length(unique(df$label))
+  COLORS  <- colorRampPalette(c("#C53030", "#3182CE", "#276749"))(n_scen)
+
+  ggplot(df, aes(x = dist_bin, y = mean_E, fill = label, group = label)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.65, alpha = 0.9) +
+    scale_fill_manual(values = COLORS, name = "Scenario") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+    labs(title    = "Mean Emission Rate by Corridor Distance Band",
+         subtitle = "Average E_eff per corridor length category, lower = better air quality",
+         x = "Corridor Distance", y = "Mean E_eff (ng/m/s)") +
+    theme_disp()
+}
+
+plot_cdf_ground_max <- function(all_results) {
+  df <- all_results %>%
+    mutate(label = paste0(av_fraction * 100, "% AV"),
+           label = factor(label, levels = paste0(sort(unique(av_fraction)) * 100, "% AV"))) %>%
+    group_by(label) %>%
+    arrange(ground_max) %>%
+    mutate(ecdf_val = seq_along(ground_max) / n()) %>%
+    ungroup()
+
+  n_scenarios <- length(unique(df$label))
+  COLORS <- colorRampPalette(c("#C53030", "#3182CE", "#276749"))(n_scenarios)
+
+  ggplot(df, aes(x = ground_max * 1e6, y = ecdf_val, color = label)) +
+    geom_line(linewidth = 1.2, alpha = 0.9) +
+    scale_color_manual(values = COLORS, name = "Scenario") +
+    scale_x_log10(labels = function(x) paste0(signif(x, 2), " ug")) +
+    scale_y_continuous(labels = scales::percent) +
+    labs(title    = "Cumulative Distribution of Peak Ground-Level PM2.5",
+         subtitle = "Each point = one corridor, x-axis log scale, rightward shift = worse air quality",
+         x = "Peak Ground PM2.5 (ug/m3, log scale)", y = "Cumulative % of Corridors") +
+    theme_disp()
+}
+
+plot_origin_ranking <- function(all_results) {
+  df <- all_results %>%
+    group_by(origin, av_fraction) %>%
+    summarise(
+      zone_ground_max = sum(ground_max * 1e6),
+      .groups = "drop"
+    ) %>%
+    mutate(label = paste0(av_fraction * 100, "% AV"))
+
+  baseline_order <- df %>%
+    filter(av_fraction == min(av_fraction)) %>%
+    arrange(desc(zone_ground_max)) %>%
+    pull(origin)
+
+  df$origin <- factor(df$origin, levels = rev(baseline_order))
+
+  n_scen <- length(unique(df$label))
+  COLORS <- colorRampPalette(c("#C53030", "#3182CE", "#276749"))(n_scen)
+
+  ggplot(df, aes(x = zone_ground_max, y = origin, fill = label)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.65, alpha = 0.9) +
+    scale_fill_manual(values = COLORS, name = "Scenario") +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+    labs(title    = "PM2.5 Burden by Origin Zone",
+         subtitle = "Sum of peak ground concentrations across all outbound corridors per zone",
+         x = "Total Ground PM2.5 Contribution (ug/m3)", y = "Origin Zone") +
+    theme_disp()
+}
+
+plot_volume_vs_conc <- function(all_results) {
+  df <- all_results %>%
+    mutate(label = paste0(av_fraction * 100, "% AV"),
+           label = factor(label, levels = paste0(sort(unique(av_fraction)) * 100, "% AV")))
+
+  ggplot(df, aes(x = total_veh, y = ground_max * 1e6, color = dist_km)) +
+    geom_point(alpha = 0.6, size = 1.8) +
+    scale_x_log10(labels = scales::comma) +
+    scale_y_log10(labels = function(x) paste0(signif(x, 2), " ug")) +
+    scale_color_gradientn(
+      colors = c("#276749", "#D97706", "#C53030"),
+      name   = "Distance\n(km)",
+      trans  = "sqrt"
+    ) +
+    facet_wrap(~label) +
+    labs(title    = "Vehicle Volume vs. Peak Ground PM2.5 by Corridor",
+         subtitle = "Both axes log scale, color = corridor distance",
+         x = "Monthly Vehicle Volume", y = "Peak Ground PM2.5 (ug/m3)") +
+    theme_disp()
+}
+
+plot_map_emission_blended <- function(all_results, zip_coords) {
+
+  node_burden <- all_results %>%
+    group_by(zip = origin, av_fraction) %>%
+    summarise(total_E = sum(E_eff), .groups = "drop") %>%
+    left_join(zip_coords, by = "zip") %>%
+    filter(!is.na(lat)) %>%
+    mutate(label = paste0(av_fraction * 100, "% AV"))
+
+  flow_base <- all_results %>%
+    filter(av_fraction == min(av_fraction), total_veh > 0) %>%
+    left_join(zip_coords %>% rename(orig_lat = lat, orig_lon = lon), by = c("origin" = "zip")) %>%
+    left_join(zip_coords %>% rename(dest_lat = lat, dest_lon = lon), by = c("destination" = "zip")) %>%
+    filter(!is.na(orig_lat), !is.na(dest_lat))
+
+  lon_range <- range(zip_coords$lon)
+  lat_range <- range(zip_coords$lat)
+
+  res      <- 300
+  sigma    <- 0.018
+  lon_grid <- seq(lon_range[1] - 0.03, lon_range[2] + 0.03, length.out = res)
+  lat_grid <- seq(lat_range[1] - 0.03, lat_range[2] + 0.03, length.out = res)
+  grid     <- expand.grid(lon = lon_grid, lat = lat_grid)
+
+  build_heatmap <- function(nodes_df) {
+    z <- numeric(nrow(grid))
+    for (k in seq_len(nrow(nodes_df))) {
+      dx <- (grid$lon - nodes_df$lon[k])
+      dy <- (grid$lat - nodes_df$lat[k])
+      z  <- z + nodes_df$total_E[k] * exp(-(dx^2 + dy^2) / (2 * sigma^2))
+    }
+    grid$z <- z
+    grid
+  }
+
+  heat_list <- lapply(unique(node_burden$av_fraction), function(frac) {
+    sub  <- node_burden %>% filter(av_fraction == frac)
+    heat <- build_heatmap(sub)
+    heat$av_fraction <- frac
+    heat$label       <- paste0(frac * 100, "% AV")
+    heat
+  })
+  heat_df <- do.call(rbind, heat_list)
+
+  zip_label <- zip_coords %>%
+    cross_join(data.frame(label = unique(node_burden$label), stringsAsFactors = FALSE))
+
+  ggplot() +
+    geom_raster(data = heat_df,
+                aes(x = lon, y = lat, fill = z),
+                interpolate = TRUE) +
+    scale_fill_gradientn(
+      colors   = c("#F0F4F8", "#C8DCF0", "#90B8D8", "#C87840", "#8B3010", "#5A1A08"),
+      values   = scales::rescale(c(0, 0.15, 0.35, 0.6, 0.8, 1)),
+      name     = "E_eff\n(relative)",
+      guide    = guide_colorbar(barwidth = 1.2, barheight = 14,
+                                ticks.colour = NA, frame.colour = NA)
+    ) +
+
+    facet_wrap(~label) +
+    coord_fixed(ratio = 1 / cos(mean(zip_coords$lat) * pi / 180),
+                xlim = lon_range + c(-0.03, 0.03),
+                ylim = lat_range + c(-0.03, 0.03)) +
+    labs(title    = "Spatial Distribution of PM2.5 Emission Burden",
+         subtitle = "Gaussian emission surface per zone, more pollution = warmer color, lines = active corridors (baseline)",
+         x = "Longitude", y = "Latitude") +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.background   = element_rect(fill = "#FFFFFF", color = NA),
+      panel.background  = element_rect(fill = "#F0F4F8", color = NA),
+      panel.grid.major  = element_line(color = "#D8E4EE", linewidth = 0.3),
+      panel.grid.minor  = element_blank(),
+      plot.title        = element_text(face = "bold", size = 14, color = "#1A202C",
+                                       margin = margin(b = 4)),
+      plot.subtitle     = element_text(color = "#718096", size = 9,
+                                       margin = margin(b = 10)),
+      axis.text         = element_text(color = "#718096", size = 9),
+      axis.title        = element_text(color = "#1A202C", size = 10),
+      strip.background  = element_rect(fill = "#E2ECF4", color = NA),
+      strip.text        = element_text(face = "bold", color = "#1A202C"),
+      legend.background = element_rect(fill = "#F0F4F8", color = NA),
+      legend.title      = element_text(color = "#1A202C"),
+      legend.text       = element_text(color = "#4A5568"),
+      plot.margin       = margin(14, 14, 14, 14)
+    )
+}
+
+emission_data <- load_emission_factors("emission_data.csv")
+flow_matrix   <- load_flow_matrix("cumulative_flow_matrix.csv")
+dist_matrix   <- load_distance_matrix("distance_matrix.csv")
+av_splits_df  <- fread("av_splits.csv")
+zip_coords    <- fread("zip_coords.csv") %>% mutate(zip = as.character(zip))
+
+av_splits <- sort(as.numeric(av_splits_df[[1]]))
+cat(sprintf("Running %d AV scenarios: %s\n",
+            length(av_splits),
+            paste0(av_splits * 100, "%", collapse = ", ")))
+
+all_results <- do.call(rbind, lapply(av_splits, function(frac) {
+  cat(sprintf("  Scenario: %.0f%% AV...\n", frac * 100))
+  run_scenario(flow_matrix, dist_matrix, av_fraction = frac,
+               emission_data = emission_data)
+}))
+
+dir.create("outputs", showWarnings = FALSE)
+fwrite(all_results, "dispersion_results.csv")
+
+if (!requireNamespace("ggnewscale", quietly = TRUE)) install.packages("ggnewscale")
+library(ggnewscale)
+
+pdf("pm25_av_scenarios.pdf", width = 14, height = 8)
+print(plot_network_burden(all_results))
+print(plot_ground_max_heatmap(all_results))
+print(plot_corridor_av_benefit(all_results))
+print(plot_busiest_plume(flow_matrix, dist_matrix, av_splits, emission_data))
+print(plot_ground_profile(flow_matrix, dist_matrix, av_splits, emission_data))
+print(plot_map_emission(all_results, zip_coords))
+print(plot_map_emission_blended(all_results, zip_coords))
+print(plot_emission_efficiency(all_results))
+print(plot_cdf_ground_max(all_results))
+print(plot_origin_ranking(all_results))
+print(plot_volume_vs_conc(all_results))
+dev.off()
+
+cat("Plots saved to pm25_av_scenarios.pdf\n")

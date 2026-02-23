@@ -320,7 +320,7 @@ plot_flow_matrix_from_csv <- function(csv_path = "outputs/cumulative_flow_matrix
 
 cellIDs <- c(2108, 2109, 2110, 2111, 2113, 2114, 2115, 2116, 2118, 2119,
              2120, 2121, 2122, 2124, 2125, 2126, 2127, 2128, 2129, 2130,
-             2131, 2132, 2134, 2135, 2136, 2203, 2210, 2215)
+             2131, 2132, 2134, 2135, 2136, 2199, 2203, 2210, 2215)
 
 distanceMatrix <- load_distance_matrix("distance_matrix.csv", cellIDs) * 1.60934
 trafficDemand <- fread("traffic_demand.csv")
