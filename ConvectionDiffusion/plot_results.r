@@ -180,16 +180,24 @@ plot_network_burden <- function(all_results) {
       mean_ground      = mean(ground_max),
       .groups = "drop"
     )
-  baseline <- df$total_emission[which.min(df$av_fraction)]
+  
+  baseline <- df$total_emission[which.max(df$av_fraction == min(df$av_fraction))]
   df$pct_reduction <- (1 - df$total_emission / baseline) * 100
-  ggplot(df, aes(x = scenario, y = total_emission, fill = av_fraction)) +
+
+  ggplot(df, aes(x = scenario, y = total_emission, fill = pct_reduction)) +
     geom_col(width = 0.6, alpha = 0.9) +
-    geom_text(aes(label = paste0(round(pct_reduction, 1), "%")),
+    geom_text(aes(label = ifelse(pct_reduction == 0, "baseline",
+                                 paste0("-", round(abs(pct_reduction), 1), "%"))),
               vjust = -0.5, fontface = "bold", color = "#1A202C", size = 3.5) +
-    scale_fill_gradientn(colors = c("#3182CE", "#276749"), guide = "none") +
+    scale_fill_gradientn(
+      colors = c("#C8DCF0", "#90B8D8", "#3182CE", "#1A4A7A"),
+      name   = "% reduction\nvs baseline",
+      guide  = guide_colorbar(barwidth = 1.2, barheight = 10,
+                              ticks.colour = NA, frame.colour = NA)
+    ) +
     scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
     labs(title    = "Total Network Emission Rate by Policy Scenario",
-         subtitle = "Sum of E_eff across all active flow corridors; % vs lowest-AV scenario",
+         subtitle = "Sum of E_eff across all active flow corridors; % reduction vs baseline scenario",
          x = "Policy Scenario", y = "Total E_eff (g/m/s)") +
     theme_disp()
 }
@@ -366,8 +374,10 @@ plot_map_emission_blended <- function(all_results, zip_coords) {
   ggplot() +
     geom_raster(data = heat_df, aes(x = lon, y = lat, fill = z), interpolate = TRUE) +
     scale_fill_gradientn(
-      colors = c("#F0F4F8", "#C8DCF0", "#90B8D8", "#C87840", "#8B3010", "#5A1A08"),
-      values = scales::rescale(c(0, 0.15, 0.35, 0.6, 0.8, 1)),
+      colors = c("#000000", "#1A0A00", "#5A1A08", "#8B3010", "#C87840", "#E8B878",
+                "#F8EEE0", "#C8DCF0", "#90B8D8", "#D0ECF8", "#FFFFFF"),
+      values = scales::rescale(c(0, 0.08, 0.18, 0.32, 0.50, 0.65,
+                                0.75, 0.83, 0.90, 0.96, 1)),
       name   = "E_eff\n(g/m/s)",
       guide  = guide_colorbar(barwidth = 1.2, barheight = 14, ticks.colour = NA, frame.colour = NA)
     ) +
