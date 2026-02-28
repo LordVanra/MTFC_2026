@@ -3,6 +3,7 @@ library(ggplot2)
 library(dplyr)
 library(tidyr)
 library(ggnewscale)
+library(forcats)
 
 policy_raw <- fread("av_all_scenarios.csv")
 TARGET_YEARS <- c(0, 10, 20, 30)
@@ -170,7 +171,6 @@ plot_ground_max_heatmap <- function(all_results) {
           axis.text.y = element_text(size = 7),
           panel.grid  = element_blank())
 }
-
 plot_network_burden <- function(all_results) {
   df <- all_results %>%
     group_by(scenario, av_fraction) %>%
@@ -184,7 +184,11 @@ plot_network_burden <- function(all_results) {
   baseline <- df$total_emission[which.max(df$av_fraction == min(df$av_fraction))]
   df$pct_reduction <- (1 - df$total_emission / baseline) * 100
 
-  ggplot(df, aes(x = scenario, y = total_emission, fill = pct_reduction)) +
+  # Sort scenarios by magnitude of reduction
+  df <- df %>%
+    mutate(scenario = fct_reorder(scenario, pct_reduction))
+
+  ggplot(df, aes(x = scenario, y = pct_reduction, fill = pct_reduction)) +
     geom_col(width = 0.6, alpha = 0.9) +
     geom_text(aes(label = ifelse(pct_reduction == 0, "baseline",
                                  paste0("-", round(abs(pct_reduction), 1), "%"))),
@@ -195,10 +199,13 @@ plot_network_burden <- function(all_results) {
       guide  = guide_colorbar(barwidth = 1.2, barheight = 10,
                               ticks.colour = NA, frame.colour = NA)
     ) +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    scale_y_continuous(
+      expand = expansion(mult = c(0, 0.15)),
+      labels = function(x) paste0(x, "%")
+    ) +
     labs(title    = "Total Network Emission Rate by Policy Scenario",
          subtitle = "Sum of E_eff across all active flow corridors; % reduction vs baseline scenario",
-         x = "Policy Scenario", y = "Total E_eff (g/m/s)") +
+         x = "Policy Scenario", y = "% Reduction from Baseline") +
     theme_disp()
 }
 
