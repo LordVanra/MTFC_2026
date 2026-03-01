@@ -414,6 +414,97 @@ plot_map_emission_blended <- function(all_results, zip_coords) {
     )
 }
 
+plot_map_optimal_policy <- function(all_results, zip_coords, w_reduction = 0.6) {
+
+  hm        <- build_emission_heatmaps(all_results, zip_coords)
+  heat_df   <- hm$heat_df
+  lon_range <- hm$lon_range
+  lat_range <- hm$lat_range
+
+  norm <- function(x) (x - min(x)) / (max(x) - min(x))
+
+  scores <- w_reduction * norm(c(0.0, 8.3, 8.8, 7.3, 8.1, 8.8, 8.7, 9.2, 11.2, 11.7, 13.4)) -
+            (1 - w_reduction) * norm(c(0.00, 0.60, 1.30, 3.25, 3.95, 4.20, 4.60, 3.50, 5.20, 7.40, 10.10))
+
+  policy_order <- c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
+                    "Phaseout", "Pulse", "Adaptive", "Moderate Rebate",
+                    "Ramp-Up", "High Rebates", "Aggressive")[order(scores)]
+
+  z      <- heat_df$z
+  n      <- length(policy_order)
+  breaks <- unique(quantile(z, probs = seq(0, 1, length.out = n + 1), na.rm = TRUE))
+  if (length(breaks) < 2) breaks <- c(min(z, na.rm = TRUE), max(z, na.rm = TRUE) + 1e-9)
+  k      <- min(n, length(breaks) - 1)
+
+  heat_df$optimal_policy <- factor(
+    as.character(cut(z, breaks = breaks, labels = policy_order[seq_len(k)], include.lowest = TRUE)),
+    levels = c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
+               "Phaseout", "Pulse", "Adaptive", "Moderate Rebate",
+               "Ramp-Up", "High Rebates", "Aggressive")
+  )
+
+  ggplot2::ggplot() +
+    ggplot2::geom_raster(
+      data        = heat_df,
+      ggplot2::aes(x = lon, y = lat, fill = optimal_policy),
+      interpolate = TRUE
+    ) +
+    ggplot2::scale_fill_manual(
+      values = c(
+        "No Policy"       = "#B0B8C8",
+        "Supply Push"     = "#A8D8A8",
+        "Infra Focus"     = "#68C080",
+        "Front-Loaded"    = "#F0D080",
+        "Phaseout"        = "#E8A840",
+        "Pulse"           = "#D87820",
+        "Adaptive"        = "#C05818",
+        "Moderate Rebate" = "#58A8D0",
+        "Ramp-Up"         = "#3878B8",
+        "High Rebates"    = "#1848A0",
+        "Aggressive"      = "#0C1A60"
+      ),
+      name  = "Optimal Policy",
+      drop  = FALSE,
+      guide = ggplot2::guide_legend(keywidth = 1.2, keyheight = 1.0)
+    ) +
+    ggplot2::facet_wrap(~scenario) +
+    ggplot2::coord_fixed(
+      ratio = 1 / cos(mean(zip_coords$lat) * pi / 180),
+      xlim  = lon_range + c(-0.03, 0.03),
+      ylim  = lat_range + c(-0.03, 0.03)
+    ) +
+    ggplot2::labs(
+      title    = "Optimal Policy Assignment by Emission Zone",
+      subtitle = paste0("Minimising pollution & spend simultaneously  |  ",
+                        "Reduction weight: ", round(w_reduction * 100), "%  |  ",
+                        "Cost weight: ", round((1 - w_reduction) * 100), "%"),
+      x        = "Longitude",
+      y        = "Latitude",
+      caption  = "Green = low-cost sufficient  \u00b7  Blue = high-reduction needed  \u00b7  Navy = most aggressive"
+    ) +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::theme(
+      plot.background   = ggplot2::element_rect(fill = "#FFFFFF", color = NA),
+      panel.background  = ggplot2::element_rect(fill = "#F0F4F8", color = NA),
+      panel.grid.major  = ggplot2::element_line(color = "#D8E4EE", linewidth = 0.3),
+      panel.grid.minor  = ggplot2::element_blank(),
+      plot.title        = ggplot2::element_text(face = "bold", size = 14, color = "#1A202C",
+                                                margin = ggplot2::margin(b = 4)),
+      plot.subtitle     = ggplot2::element_text(color = "#718096", size = 9,
+                                                margin = ggplot2::margin(b = 10)),
+      plot.caption      = ggplot2::element_text(color = "#A0AEC0", size = 8,
+                                                margin = ggplot2::margin(t = 8)),
+      axis.text         = ggplot2::element_text(color = "#718096", size = 9),
+      axis.title        = ggplot2::element_text(color = "#1A202C", size = 10),
+      strip.background  = ggplot2::element_rect(fill = "#E2ECF4", color = NA),
+      strip.text        = ggplot2::element_text(face = "bold", color = "#1A202C"),
+      legend.background = ggplot2::element_rect(fill = "#F0F4F8", color = NA),
+      legend.title      = ggplot2::element_text(color = "#1A202C", size = 9, face = "bold"),
+      legend.text       = ggplot2::element_text(color = "#4A5568", size = 8),
+      plot.margin       = ggplot2::margin(14, 14, 14, 14)
+    )
+}
+
 plot_map_emission_blended_diff <- function(all_results, zip_coords) {
   hm        <- build_emission_heatmaps(all_results, zip_coords)
   heat_df   <- hm$heat_df
@@ -599,6 +690,7 @@ for (yr in TARGET_YEARS) {
   print(plot_ground_profile(flow_matrix, dist_matrix, year_rows, emission_data))
   print(plot_map_emission(all_results, zip_coords))
   print(plot_map_emission_blended(all_results, zip_coords))
+  print(plot_map_optimal_policy(all_results, zip_coords))
   print(plot_map_emission_blended_diff(all_results, zip_coords))
   print(plot_emission_efficiency(all_results))
   print(plot_cdf_ground_max(all_results))
