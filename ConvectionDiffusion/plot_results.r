@@ -414,94 +414,174 @@ plot_map_emission_blended <- function(all_results, zip_coords) {
     )
 }
 
-plot_map_optimal_policy <- function(all_results, zip_coords, w_reduction = 0.6) {
+plot_map_optimal_policy <- function(all_results, zip_coords,
+                                    w_reduction  = 0.6,
+                                    budget_B     = 5.0) {
 
-  hm        <- build_emission_heatmaps(all_results, zip_coords)
-  heat_df   <- hm$heat_df
-  lon_range <- hm$lon_range
-  lat_range <- hm$lat_range
+  policy_catalogue <- data.frame(
+    policy       = c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
+                     "Moderate Rebate", "Phaseout", "Pulse", "Adaptive",
+                     "Ramp-Up", "High Rebates", "Aggressive"),
+    reduction    = c(0.0,  8.3,  8.8,  7.3,   8.7,  8.1,  8.8,  9.2,  11.2, 11.7, 13.4),
+    total_cost_B = c(0.00, 0.90, 1.30, 3.50,  3.50, 3.95, 4.20, 4.80,  5.20, 7.40, 10.10),
+    stringsAsFactors = FALSE
+  )
+  policy_catalogue$per_node_cost_B <- policy_catalogue$total_cost_B / 28
 
-  norm <- function(x) (x - min(x)) / (max(x) - min(x))
+  node_burden <- all_results %>%
+    group_by(zip = origin) %>%
+    summarise(total_E = sum(E_eff), .groups = "drop") %>%
+    left_join(zip_coords, by = "zip") %>%
+    filter(!is.na(lat)) %>%
+    arrange(desc(total_E))
 
-  scores <- w_reduction * norm(c(0.0, 8.3, 8.8, 7.3, 8.1, 8.8, 8.7, 9.2, 11.2, 11.7, 13.4)) -
-            (1 - w_reduction) * norm(c(0.00, 0.60, 1.30, 3.25, 3.95, 4.20, 4.60, 3.50, 5.20, 7.40, 10.10))
+  n_nodes     <- nrow(node_burden)
+  burden_norm <- (node_burden$total_E - min(node_burden$total_E)) /
+                 (max(node_burden$total_E) - min(node_burden$total_E) + 1e-30)
 
-  policy_order <- c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
-                    "Phaseout", "Pulse", "Adaptive", "Moderate Rebate",
-                    "Ramp-Up", "High Rebates", "Aggressive")[order(scores)]
+  reduction_range <- range(policy_catalogue$reduction)
+  cost_range      <- range(policy_catalogue$per_node_cost_B)
 
-  z      <- heat_df$z
-  n      <- length(policy_order)
-  breaks <- unique(quantile(z, probs = seq(0, 1, length.out = n + 1), na.rm = TRUE))
-  if (length(breaks) < 2) breaks <- c(min(z, na.rm = TRUE), max(z, na.rm = TRUE) + 1e-9)
-  k      <- min(n, length(breaks) - 1)
+  policy_catalogue$reduction_norm <- (policy_catalogue$reduction - reduction_range[1]) /
+                                     (reduction_range[2] - reduction_range[1])
+  policy_catalogue$cost_norm      <- (policy_catalogue$per_node_cost_B - cost_range[1]) /
+                                     (cost_range[2] - cost_range[1])
 
-  heat_df$optimal_policy <- factor(
-    as.character(cut(z, breaks = breaks, labels = policy_order[seq_len(k)], include.lowest = TRUE)),
-    levels = c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
-               "Phaseout", "Pulse", "Adaptive", "Moderate Rebate",
-               "Ramp-Up", "High Rebates", "Aggressive")
+  non_free <- policy_catalogue[policy_catalogue$policy != "No Policy", ]
+
+  remaining_budget <- budget_B
+  assigned_policy  <- character(n_nodes)
+  assigned_cost    <- numeric(n_nodes)
+
+  for (i in seq_len(n_nodes)) {
+    b             <- burden_norm[i]
+    nodes_left    <- n_nodes - i + 1
+    max_node_cost <- min(remaining_budget * (0.5 + 0.5 * b) / nodes_left * 2, remaining_budget)
+    affordable    <- non_free[non_free$per_node_cost_B <= max_node_cost, ]
+
+    if (nrow(affordable) == 0) {
+      chosen <- "No Policy"
+      cost   <- 0
+    } else {
+      affordable$score <- b * affordable$reduction_norm - (1 - b) * affordable$cost_norm
+      best   <- affordable[which.max(affordable$score), ]
+      chosen <- best$policy
+      cost   <- best$per_node_cost_B
+    }
+    assigned_policy[i] <- chosen
+    assigned_cost[i]   <- cost
+    remaining_budget   <- remaining_budget - cost
+  }
+
+  upgrade_order <- order(burden_norm, decreasing = TRUE)
+  changed       <- TRUE
+  while (remaining_budget > min(non_free$per_node_cost_B) && changed) {
+    changed <- FALSE
+    for (i in upgrade_order) {
+      current_cost <- assigned_cost[i]
+      b            <- burden_norm[i]
+      upgrades     <- non_free[non_free$per_node_cost_B > current_cost &
+                                 non_free$per_node_cost_B <= current_cost + remaining_budget, ]
+      if (nrow(upgrades) == 0) next
+      upgrades$score <- b * upgrades$reduction_norm - (1 - b) * upgrades$cost_norm
+      best           <- upgrades[which.max(upgrades$score), ]
+      delta          <- best$per_node_cost_B - current_cost
+      assigned_policy[i] <- best$policy
+      assigned_cost[i]   <- best$per_node_cost_B
+      remaining_budget   <- remaining_budget - delta
+      changed            <- TRUE
+      if (remaining_budget <= min(non_free$per_node_cost_B)) break
+    }
+  }
+
+  node_burden$policy      <- assigned_policy
+  node_burden$node_cost_B <- assigned_cost
+
+  total_spent <- budget_B - remaining_budget
+  pct_budget  <- round(total_spent / budget_B * 100, 1)
+
+  policy_colors <- c(
+    "No Policy"       = "#B0B8C8",
+    "Supply Push"     = "#A8D8A8",
+    "Infra Focus"     = "#68C080",
+    "Front-Loaded"    = "#F0D080",
+    "Moderate Rebate" = "#58A8D0",
+    "Phaseout"        = "#E8A840",
+    "Pulse"           = "#D87820",
+    "Adaptive"        = "#C05818",
+    "Ramp-Up"         = "#3878B8",
+    "High Rebates"    = "#1848A0",
+    "Aggressive"      = "#0C1A60"
   )
 
-  ggplot2::ggplot() +
-    ggplot2::geom_raster(
-      data        = heat_df,
-      ggplot2::aes(x = lon, y = lat, fill = optimal_policy),
-      interpolate = TRUE
+  node_burden$policy <- factor(node_burden$policy, levels = names(policy_colors))
+
+  baseline_scen <- all_results$scenario[which.min(all_results$av_fraction)]
+
+  edge_df <- all_results %>%
+    filter(scenario == baseline_scen, total_veh > 0) %>%
+    left_join(zip_coords %>% rename(orig_lat = lat, orig_lon = lon), by = c("origin" = "zip")) %>%
+    left_join(zip_coords %>% rename(dest_lat = lat, dest_lon = lon), by = c("destination" = "zip")) %>%
+    filter(!is.na(orig_lat), !is.na(dest_lat))
+
+  lon_range <- range(zip_coords$lon, na.rm = TRUE)
+  lat_range <- range(zip_coords$lat, na.rm = TRUE)
+
+  subtitle_txt <- sprintf(
+    "Budget: $%.1fB  |  Spent: $%.2fB (%.1f%%)  |  Remaining: $%.2fB  |  Policy intensity matched to node PM2.5 burden",
+    budget_B, total_spent, pct_budget, remaining_budget
+  )
+
+  ggplot() +
+    geom_segment(
+      data  = edge_df,
+      aes(x = orig_lon, y = orig_lat, xend = dest_lon, yend = dest_lat,
+          alpha = log10(total_veh + 1)),
+      color     = "#94A3B8",
+      linewidth = 0.35
     ) +
-    ggplot2::scale_fill_manual(
-      values = c(
-        "No Policy"       = "#B0B8C8",
-        "Supply Push"     = "#A8D8A8",
-        "Infra Focus"     = "#68C080",
-        "Front-Loaded"    = "#F0D080",
-        "Phaseout"        = "#E8A840",
-        "Pulse"           = "#D87820",
-        "Adaptive"        = "#C05818",
-        "Moderate Rebate" = "#58A8D0",
-        "Ramp-Up"         = "#3878B8",
-        "High Rebates"    = "#1848A0",
-        "Aggressive"      = "#0C1A60"
-      ),
-      name  = "Optimal Policy",
-      drop  = FALSE,
-      guide = ggplot2::guide_legend(keywidth = 1.2, keyheight = 1.0)
+    scale_alpha_continuous(range = c(0.04, 0.30), guide = "none") +
+    geom_point(
+      data  = node_burden,
+      aes(x = lon, y = lat, fill = policy),
+      shape  = 21,
+      size   = 6,
+      color  = "#1A202C",
+      stroke = 0.6
     ) +
-    ggplot2::facet_wrap(~scenario) +
-    ggplot2::coord_fixed(
-      ratio = 1 / cos(mean(zip_coords$lat) * pi / 180),
-      xlim  = lon_range + c(-0.03, 0.03),
-      ylim  = lat_range + c(-0.03, 0.03)
+    scale_fill_manual(
+      values = policy_colors,
+      name   = "Optimal Policy",
+      drop   = FALSE,
+      guide  = guide_legend(keywidth = 1.2, keyheight = 1.0, override.aes = list(size = 5))
     ) +
-    ggplot2::labs(
-      title    = "Optimal Policy Assignment by Emission Zone",
-      subtitle = paste0("Minimising pollution & spend simultaneously  |  ",
-                        "Reduction weight: ", round(w_reduction * 100), "%  |  ",
-                        "Cost weight: ", round((1 - w_reduction) * 100), "%"),
+    coord_fixed(
+      ratio = 1 / cos(mean(zip_coords$lat, na.rm = TRUE) * pi / 180),
+      xlim  = lon_range + c(-0.04, 0.04),
+      ylim  = lat_range + c(-0.04, 0.04)
+    ) +
+    labs(
+      title    = sprintf("Budget-Optimal Policy per Node  ($%.1fB cap)", budget_B),
+      subtitle = subtitle_txt,
       x        = "Longitude",
       y        = "Latitude",
-      caption  = "Green = low-cost sufficient  \u00b7  Blue = high-reduction needed  \u00b7  Navy = most aggressive"
+      caption  = "Green = low-cost  ·  Blue = moderate  ·  Navy = high-investment  ·  Grey = no policy (budget exhausted)"
     ) +
-    ggplot2::theme_minimal(base_size = 11) +
-    ggplot2::theme(
-      plot.background   = ggplot2::element_rect(fill = "#FFFFFF", color = NA),
-      panel.background  = ggplot2::element_rect(fill = "#F0F4F8", color = NA),
-      panel.grid.major  = ggplot2::element_line(color = "#D8E4EE", linewidth = 0.3),
-      panel.grid.minor  = ggplot2::element_blank(),
-      plot.title        = ggplot2::element_text(face = "bold", size = 14, color = "#1A202C",
-                                                margin = ggplot2::margin(b = 4)),
-      plot.subtitle     = ggplot2::element_text(color = "#718096", size = 9,
-                                                margin = ggplot2::margin(b = 10)),
-      plot.caption      = ggplot2::element_text(color = "#A0AEC0", size = 8,
-                                                margin = ggplot2::margin(t = 8)),
-      axis.text         = ggplot2::element_text(color = "#718096", size = 9),
-      axis.title        = ggplot2::element_text(color = "#1A202C", size = 10),
-      strip.background  = ggplot2::element_rect(fill = "#E2ECF4", color = NA),
-      strip.text        = ggplot2::element_text(face = "bold", color = "#1A202C"),
-      legend.background = ggplot2::element_rect(fill = "#F0F4F8", color = NA),
-      legend.title      = ggplot2::element_text(color = "#1A202C", size = 9, face = "bold"),
-      legend.text       = ggplot2::element_text(color = "#4A5568", size = 8),
-      plot.margin       = ggplot2::margin(14, 14, 14, 14)
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.background   = element_rect(fill = "#FFFFFF", color = NA),
+      panel.background  = element_rect(fill = "#F0F4F8", color = NA),
+      panel.grid.major  = element_line(color = "#D8E4EE", linewidth = 0.3),
+      panel.grid.minor  = element_blank(),
+      plot.title        = element_text(face = "bold", size = 14, color = "#1A202C", margin = margin(b = 4)),
+      plot.subtitle     = element_text(color = "#718096", size = 8, margin = margin(b = 10)),
+      plot.caption      = element_text(color = "#A0AEC0", size = 8, margin = margin(t = 8)),
+      axis.text         = element_text(color = "#718096", size = 9),
+      axis.title        = element_text(color = "#1A202C", size = 10),
+      legend.background = element_rect(fill = "#F0F4F8", color = NA),
+      legend.title      = element_text(color = "#1A202C", size = 9, face = "bold"),
+      legend.text       = element_text(color = "#4A5568", size = 8),
+      plot.margin       = margin(14, 14, 14, 14)
     )
 }
 
@@ -691,6 +771,8 @@ for (yr in TARGET_YEARS) {
   print(plot_map_emission(all_results, zip_coords))
   print(plot_map_emission_blended(all_results, zip_coords))
   print(plot_map_optimal_policy(all_results, zip_coords))
+  print(plot_map_optimal_policy(all_results, zip_coords, budget_B = 2.5))
+  print(plot_map_optimal_policy(all_results, zip_coords, budget_B = 1))
   print(plot_map_emission_blended_diff(all_results, zip_coords))
   print(plot_emission_efficiency(all_results))
   print(plot_cdf_ground_max(all_results))
