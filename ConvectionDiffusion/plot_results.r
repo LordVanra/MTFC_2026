@@ -8,6 +8,14 @@ library(forcats)
 policy_raw <- fread("av_all_scenarios.csv")
 TARGET_YEARS <- c(0, 10, 20, 30)
 
+POLICY_COSTS <- data.frame(
+  scenario     = c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
+                   "Moderate Rebate", "Phaseout", "Pulse", "Adaptive",
+                   "Ramp-Up", "High Rebates", "Aggressive"),
+  total_cost_B = c(0.00, 0.90, 1.30, 3.50, 3.80, 3.80, 4.20, 4.80, 5.30, 7.40, 10.10),
+  stringsAsFactors = FALSE
+)
+
 load_emission_factors <- function(filepath) {
   data <- fread(filepath)
   for (p in c("PM2.5", "NOx", "CO2")) {
@@ -171,6 +179,7 @@ plot_ground_max_heatmap <- function(all_results) {
           axis.text.y = element_text(size = 7),
           panel.grid  = element_blank())
 }
+
 plot_network_burden <- function(all_results) {
   df <- all_results %>%
     group_by(scenario, av_fraction) %>%
@@ -180,14 +189,10 @@ plot_network_burden <- function(all_results) {
       mean_ground      = mean(ground_max),
       .groups = "drop"
     )
-  
   baseline <- df$total_emission[which.max(df$av_fraction == min(df$av_fraction))]
   df$pct_reduction <- (1 - df$total_emission / baseline) * 100
-
-  # Sort scenarios by magnitude of reduction
   df <- df %>%
     mutate(scenario = fct_reorder(scenario, pct_reduction))
-
   ggplot(df, aes(x = scenario, y = pct_reduction, fill = pct_reduction)) +
     geom_col(width = 0.6, alpha = 0.9) +
     geom_text(aes(label = ifelse(pct_reduction == 0, "baseline",
@@ -417,13 +422,12 @@ plot_map_emission_blended <- function(all_results, zip_coords) {
 plot_map_optimal_policy <- function(all_results, zip_coords,
                                     w_reduction  = 0.6,
                                     budget_B     = 5.0) {
-
   policy_catalogue <- data.frame(
     policy       = c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
                      "Moderate Rebate", "Phaseout", "Pulse", "Adaptive",
                      "Ramp-Up", "High Rebates", "Aggressive"),
     reduction    = c(0.0,  8.3,  8.8,  7.3,   8.7,  8.1,  8.8,  9.2,  11.2, 11.7, 13.4),
-    total_cost_B = c(0.00, 0.90, 1.30, 3.50,  3.50, 3.95, 4.20, 4.80,  5.20, 7.40, 10.10),
+    total_cost_B = c(0.00, 0.90, 1.30, 3.50,  3.80, 3.80, 4.20, 4.80,  5.30, 7.40, 10.10),
     stringsAsFactors = FALSE
   )
   policy_catalogue$per_node_cost_B <- policy_catalogue$total_cost_B / 28
@@ -458,7 +462,6 @@ plot_map_optimal_policy <- function(all_results, zip_coords,
     nodes_left    <- n_nodes - i + 1
     max_node_cost <- min(remaining_budget * (0.5 + 0.5 * b) / nodes_left * 2, remaining_budget)
     affordable    <- non_free[non_free$per_node_cost_B <= max_node_cost, ]
-
     if (nrow(affordable) == 0) {
       chosen <- "No Policy"
       cost   <- 0
@@ -657,7 +660,6 @@ plot_map_emission_blended_diff <- function(all_results, zip_coords) {
     )
 }
 
-
 plot_emission_efficiency <- function(all_results) {
   df <- all_results %>%
     mutate(dist_bin = cut(dist_km, breaks = c(0, 2, 5, 10, 20, Inf),
@@ -732,6 +734,244 @@ plot_volume_vs_conc <- function(all_results) {
     theme_disp()
 }
 
+plot_pipeline_diagram <- function() {
+  library(grid)
+
+  box_w  <- 0.22;  box_h  <- 0.30
+  gap    <- 0.08
+  y_mid  <- 0.55
+  x1     <- 0.08; x2 <- x1 + box_w + gap + 0.04; x3 <- x2 + box_w + gap + 0.04
+
+  box_fill   <- "#1E3A5F"
+  box_border <- "#3182CE"
+  arrow_col  <- "#63B3ED"
+  text_white <- "#F0F8FF"
+  text_grey  <- "#90CDF4"
+  bg_col     <- "#0A1628"
+  accent_col <- "#F6AD55"
+  green_col  <- "#68D391"
+
+  grid.newpage()
+  pushViewport(viewport(width = 1, height = 1))
+
+  grid.rect(gp = gpar(fill = bg_col, col = NA))
+
+  grid.text("Three-Model Pipeline: SSM \u2192 CTM \u2192 CDM",
+            x = 0.5, y = 0.94,
+            gp = gpar(col = text_white, fontsize = 16, fontface = "bold", fontfamily = "mono"))
+  grid.text("Discrete State Space  \u00b7  1st-Order Traffic Flow  \u00b7  PDE Dispersion",
+            x = 0.5, y = 0.88,
+            gp = gpar(col = text_grey, fontsize = 10, fontfamily = "mono"))
+
+  draw_box <- function(xc, yc, title, subtitle, inputs, output_var) {
+    xl <- xc - box_w / 2
+    yb <- yc - box_h / 2;  yt <- yc + box_h / 2
+    grid.rect(x = xl + 0.008, y = yb - 0.008, width = box_w, height = box_h,
+              just = c("left","bottom"), gp = gpar(fill = "#0D1F3C", col = NA))
+    grid.rect(x = xl, y = yb, width = box_w, height = box_h,
+              just = c("left","bottom"), gp = gpar(fill = box_fill, col = box_border, lwd = 2))
+    grid.rect(x = xl, y = yt - 0.045, width = box_w, height = 0.045,
+              just = c("left","bottom"), gp = gpar(fill = box_border, col = NA))
+    grid.text(title, x = xc, y = yt - 0.022,
+              gp = gpar(col = text_white, fontsize = 11, fontface = "bold", fontfamily = "mono"))
+    grid.text(subtitle, x = xc, y = yc + 0.06,
+              gp = gpar(col = text_grey, fontsize = 7.5, fontfamily = "mono"))
+    for (i in seq_along(inputs)) {
+      grid.text(paste0("\u25b8 ", inputs[i]),
+                x = xl + 0.012, y = yc + 0.01 - (i - 1) * 0.038,
+                just = "left",
+                gp = gpar(col = "#A0C4E8", fontsize = 7, fontfamily = "mono"))
+    }
+    grid.text(paste0("out: ", output_var),
+              x = xc, y = yb + 0.022,
+              gp = gpar(col = accent_col, fontsize = 8, fontface = "bold", fontfamily = "mono"))
+  }
+
+  draw_arrow <- function(x_from, x_to, yc, var_label) {
+    xa <- x_from + box_w / 2
+    xb <- x_to   - box_w / 2
+    xm <- (xa + xb) / 2
+    grid.lines(x = c(xa, xb), y = c(yc, yc),
+               gp = gpar(col = arrow_col, lwd = 2.5, lineend = "butt"))
+    grid.polygon(x = c(xb, xb - 0.018, xb - 0.018),
+                 y = c(yc, yc + 0.016, yc - 0.016),
+                 gp = gpar(fill = arrow_col, col = NA))
+    grid.rect(x = xm - 0.055, y = yc + 0.018, width = 0.11, height = 0.032,
+              just = c("left","bottom"), gp = gpar(fill = "#102540", col = accent_col, lwd = 1))
+    grid.text(var_label, x = xm, y = yc + 0.034,
+              gp = gpar(col = accent_col, fontsize = 8.5, fontface = "bold", fontfamily = "mono"))
+  }
+
+  draw_box(xc = x1 + box_w / 2, yc = y_mid,
+           title = "SSM", subtitle = "Discrete State Space",
+           inputs = c("Policy levers", "AV adoption rate", "Incentive schedule"),
+           output_var = "p(t)")
+  draw_box(xc = x2 + box_w / 2, yc = y_mid,
+           title = "CTM", subtitle = "1st-Order Traffic Flow",
+           inputs = c("Flow matrix", "Distance matrix", "p(t) from SSM"),
+           output_var = "q\u1d62(t)")
+  draw_box(xc = x3 + box_w / 2, yc = y_mid,
+           title = "CDM", subtitle = "PDE Dispersion",
+           inputs = c("E_eff (emission rate)", "Wind / diffusion params", "q\u1d62(t) from CTM"),
+           output_var = "C_PM2.5(x,t)")
+
+  draw_arrow(x1 + box_w / 2, x2 + box_w / 2, y_mid, "p(t)")
+  draw_arrow(x2 + box_w / 2, x3 + box_w / 2, y_mid, "q\u1d62(t)")
+
+  xout <- x3 + box_w / 2
+  yout <- y_mid - box_h / 2 - 0.10
+  grid.lines(x = c(xout, xout), y = c(y_mid - box_h / 2, yout + 0.038),
+             gp = gpar(col = green_col, lwd = 2, lty = "dashed"))
+  grid.polygon(x = c(xout, xout - 0.015, xout + 0.015),
+               y = c(yout + 0.038, yout + 0.058, yout + 0.058),
+               gp = gpar(fill = green_col, col = NA))
+  grid.rect(x = xout - 0.12, y = yout - 0.024, width = 0.24, height = 0.062,
+            just = c("left","bottom"), gp = gpar(fill = "#0D2B1A", col = green_col, lwd = 1.5))
+  grid.text("Final Output: C_PM2.5(x, t)", x = xout, y = yout + 0.007,
+            gp = gpar(col = green_col, fontsize = 9.5, fontface = "bold", fontfamily = "mono"))
+
+  grid.text(
+    "Each model feeds its key transfer variable into the next stage. SSM sets fleet composition,\nCTM converts fleet to corridor-level flows, CDM solves the advection-diffusion PDE to yield spatially-resolved PM2.5.",
+    x = 0.5, y = 0.10,
+    gp = gpar(col = "#718096", fontsize = 8, fontfamily = "mono")
+  )
+
+  popViewport()
+  invisible(NULL)
+}
+
+plot_cost_effectiveness <- function(all_results) {
+  emission_summary <- all_results %>%
+    group_by(scenario, av_fraction) %>%
+    summarise(total_emission = sum(E_eff), .groups = "drop")
+
+  baseline_emission <- emission_summary$total_emission[
+    which.min(emission_summary$av_fraction)
+  ]
+
+  emission_summary <- emission_summary %>%
+    mutate(pct_reduction = (1 - total_emission / baseline_emission) * 100)
+
+  df <- emission_summary %>%
+    left_join(POLICY_COSTS, by = "scenario")
+
+  unmatched <- df$scenario[is.na(df$total_cost_B)]
+  if (length(unmatched) > 0) {
+    message("plot_cost_effectiveness: scenarios not found in POLICY_COSTS: ",
+            paste(unique(unmatched), collapse = ", "))
+    message("POLICY_COSTS names: ", paste(POLICY_COSTS$scenario, collapse = ", "))
+  }
+
+  df <- df %>%
+    filter(!is.na(total_cost_B)) %>%
+    mutate(
+      cost_per_pp = ifelse(pct_reduction > 1e-6,
+                           (total_cost_B * 1e9) / pct_reduction,
+                           NA_real_),
+      funding_tier = case_when(
+        total_cost_B <= 1.30 ~ "Low",
+        total_cost_B <= 4.80 ~ "Baseline",
+        TRUE                 ~ "High"
+      ),
+      funding_tier  = factor(funding_tier, levels = c("Low", "Baseline", "High")),
+      is_aggressive = grepl("Aggressive", scenario, ignore.case = TRUE)
+    )
+
+  if (all(is.na(df$cost_per_pp)) || nrow(df) == 0) {
+    message("plot_cost_effectiveness: no scenarios with non-zero PM2.5 reduction at this year - showing cost-only chart.")
+    df_cost <- POLICY_COSTS %>%
+      filter(scenario != "No Policy") %>%
+      mutate(
+        funding_tier = case_when(
+          total_cost_B <= 1.30 ~ "Low",
+          total_cost_B <= 4.80 ~ "Baseline",
+          TRUE                 ~ "High"
+        ),
+        funding_tier  = factor(funding_tier, levels = c("Low", "Baseline", "High")),
+        scenario      = fct_reorder(scenario, total_cost_B)
+      )
+    tier_colors <- c("Low" = "#2B7A5A", "Baseline" = "#2C5F9E", "High" = "#8B3010")
+    return(
+      ggplot(df_cost, aes(x = total_cost_B, y = scenario, fill = funding_tier)) +
+        geom_col(width = 0.65, alpha = 0.88) +
+        geom_text(aes(label = paste0("$", total_cost_B, "B")),
+                  hjust = -0.1, size = 3, fontface = "bold", color = "#1A202C") +
+        scale_fill_manual(values = tier_colors, name = "Funding Tier") +
+        scale_x_continuous(expand = expansion(mult = c(0, 0.2)),
+                           labels = function(x) paste0("$", x, "B")) +
+        scale_y_discrete() +
+        labs(title    = "Policy Scenario Costs (Year 0: all scenarios identical, no reduction yet)",
+             subtitle = "Cost-effectiveness cannot be computed until scenarios diverge (Year 10+)",
+             x = "Total Policy Cost (USD billions)", y = NULL) +
+        theme_disp()
+    )
+  }
+
+  df <- df %>%
+    filter(!is.na(cost_per_pp), pct_reduction > 0) %>%
+    arrange(cost_per_pp) %>%
+    mutate(scenario = factor(scenario, levels = scenario))
+
+  best_row <- df[which.min(df$cost_per_pp), ]
+  x_max    <- max(df$cost_per_pp, na.rm = TRUE)
+
+  tier_colors <- c("Low" = "#2B7A5A", "Baseline" = "#2C5F9E", "High" = "#8B3010")
+
+  ggplot(df, aes(x = cost_per_pp / 1e6, y = scenario, fill = funding_tier)) +
+    annotate("rect",
+             xmin = 0, xmax = best_row$cost_per_pp / 1e6 * 1.15,
+             ymin = -Inf, ymax = Inf,
+             fill = "#2B7A5A", alpha = 0.07) +
+    geom_col(width = 0.65, alpha = 0.88) +
+    geom_col(data = df %>% filter(is_aggressive),
+             aes(x = cost_per_pp / 1e6, y = scenario),
+             fill = NA, color = "#F6AD55", linewidth = 1.2, width = 0.65) +
+    geom_text(aes(label = paste0("$", formatC(cost_per_pp / 1e6, format = "f", digits = 1), "M / pp")),
+              hjust = -0.08, size = 2.9, fontface = "bold", color = "#1A202C") +
+    geom_text(data = df %>% filter(cost_per_pp == min(cost_per_pp)),
+              aes(x = cost_per_pp / 1e6 / 2, y = scenario, label = "most cost-effective"),
+              hjust = 0.5, size = 3, color = "#FFFFFF", fontface = "bold") +
+    geom_text(data = df %>% filter(is_aggressive),
+              aes(x = cost_per_pp / 1e6 + x_max / 1e6 * 0.02,
+                  y = scenario,
+                  label = paste0("max reduction: -", round(pct_reduction, 1), "% PM2.5")),
+              hjust = 0, size = 2.8, color = "#F6AD55") +
+    scale_fill_manual(values = tier_colors, name = "Funding Tier",
+                      guide = guide_legend(keywidth = 1.2, keyheight = 0.9,
+                                           override.aes = list(alpha = 0.9))) +
+    scale_x_continuous(
+      expand = expansion(mult = c(0, 0.45)),
+      labels = function(x) paste0("$", round(x, 1), "M")
+    ) +
+    scale_y_discrete() +
+    labs(
+      title    = "Cost-Effectiveness by Policy Scenario",
+      subtitle = "Cost per percentage-point PM2.5 reduction (lower = more cost-effective per dollar spent)\nDerived from simulated E_eff reduction vs scenario total cost. Orange border = Aggressive scenario.",
+      x        = "Cost per Percentage-Point PM2.5 Reduction (USD millions)",
+      y        = NULL,
+      caption  = "Green shading = most cost-effective zone  \u00b7  Low Funding scenarios dominate on a per-dollar basis  \u00b7  Cost data from policy catalogue"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.background    = element_rect(fill = "#FFFFFF", color = NA),
+      panel.background   = element_rect(fill = "#F8F9FA", color = NA),
+      panel.grid.major.y = element_blank(),
+      panel.grid.major.x = element_line(color = "#E2E8F0", linewidth = 0.4),
+      panel.grid.minor   = element_blank(),
+      plot.title         = element_text(face = "bold", size = 14, color = "#1A202C", margin = margin(b = 4)),
+      plot.subtitle      = element_text(color = "#718096", size = 9, margin = margin(b = 10)),
+      plot.caption       = element_text(color = "#A0AEC0", size = 8, margin = margin(t = 8)),
+      axis.text.y        = element_text(color = "#2D3748", size = 9),
+      axis.text.x        = element_text(color = "#718096", size = 8),
+      axis.title.x       = element_text(color = "#1A202C", size = 10, margin = margin(t = 8)),
+      legend.background  = element_rect(fill = "#F8F9FA", color = NA),
+      legend.title       = element_text(color = "#1A202C", size = 9, face = "bold"),
+      legend.text        = element_text(color = "#4A5568", size = 8.5),
+      legend.position    = "right",
+      plot.margin        = margin(14, 14, 14, 14)
+    )
+}
+
 emission_data <- load_emission_factors("emission_data.csv")
 flow_matrix   <- load_flow_matrix("cumulative_flow_matrix.csv")
 dist_matrix   <- load_distance_matrix("distance_matrix.csv")
@@ -759,6 +999,7 @@ for (yr in TARGET_YEARS) {
   fwrite(all_results, sprintf("outputs/dispersion_results_year%02d.csv", yr))
   pdf_path <- sprintf("outputs/pm25_av_scenarios_year%02d.pdf", yr)
   pdf(pdf_path, width = 14, height = 8)
+  plot_pipeline_diagram()
   plot.new()
   title(main = sprintf("PM2.5 AV Scenarios - Year %d", yr),
         sub  = paste("Policies:", paste(year_rows$scenario, collapse = " | ")),
@@ -778,6 +1019,7 @@ for (yr in TARGET_YEARS) {
   print(plot_cdf_ground_max(all_results))
   print(plot_origin_ranking(all_results))
   print(plot_volume_vs_conc(all_results))
+  print(plot_cost_effectiveness(all_results))
   dev.off()
   cat(sprintf("  Saved: %s\n", pdf_path))
 }

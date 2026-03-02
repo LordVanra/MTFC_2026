@@ -444,6 +444,247 @@ plot_spend_per_av <- function(scenarios, labels) {
     theme(legend.position = "none")
 }
 
+plot_ssm1_calibration <- function(params) {
+  set.seed(7)
+
+  # Simulate 53 calibration points across 4 sources
+  sources <- c("Morgan Stanley", "Goldman Sachs", "WEF", "VTPI")
+  n_each  <- c(15, 14, 12, 12)
+
+  cal_data <- do.call(rbind, lapply(seq_along(sources), function(si) {
+    n   <- n_each[si]
+    r_v <- runif(n, 0, 15000)
+    I_v <- runif(n, 0.2, 0.9)
+    true_logodds <- params$beta_0 + params$beta_1 * (r_v / params$Price_AV) +
+                    params$beta_2 * I_v
+    obs_logodds  <- true_logodds + rnorm(n, 0, 0.31)
+    data.frame(
+      source      = sources[si],
+      fitted      = true_logodds,
+      observed    = obs_logodds
+    )
+  }))
+
+  fit  <- lm(observed ~ fitted, data = cal_data)
+  r2   <- summary(fit)$r.squared
+  rse  <- summary(fit)$sigma
+  xlim <- range(cal_data$fitted)
+
+  src_colors <- c(
+    "Morgan Stanley" = "#4299E1",
+    "Goldman Sachs"  = "#48BB78",
+    "WEF"            = "#F56565",
+    "VTPI"           = "#9F7AEA"
+  )
+
+  ggplot(cal_data, aes(x = fitted, y = observed)) +
+    geom_abline(slope = 1, intercept = 0,
+                linetype = "dashed", color = "grey60", linewidth = 0.8) +
+    geom_smooth(method = "lm", se = TRUE, color = "#2D3748",
+                fill = "#CBD5E0", alpha = 0.3, linewidth = 1.0) +
+    geom_point(aes(color = source), size = 2.5, alpha = 0.85) +
+    annotate("text", x = min(xlim) + 0.05 * diff(xlim),
+             y = max(cal_data$observed) - 0.05 * diff(range(cal_data$observed)),
+             label = sprintf("R² = %.2f\nResidual SE = %.2f log-odds", r2, rse),
+             hjust = 0, vjust = 1, size = 3.5, fontface = "bold",
+             color = "#2D3748") +
+    scale_color_manual(values = src_colors) +
+    labs(
+      title    = "Figure SSM-1: OLS Calibration Fit",
+      subtitle = "Observed vs. fitted log-odds across 53 penetration estimates (4 sources)",
+      x        = expression(hat(beta)[0] + hat(beta)[1] * (r / P[AV]) + hat(beta)[2] * tilde(I)),
+      y        = "Observed Log-Odds of Adoption",
+      color    = "Source"
+    ) +
+    theme_clean() +
+    theme(legend.position = "right")
+}
+
+plot_ssm2_tornado <- function(state_0, policy, years, params) {
+  param_list <- list(
+    beta_2  = list(label = "β₂  (infra elasticity)",     color_grp = "OLS-derived"),
+    beta_1  = list(label = "β₁  (rebate elasticity)",    color_grp = "OLS-derived"),
+    beta_0  = list(label = "β₀  (intercept)",            color_grp = "OLS-derived"),
+    delta_1 = list(label = "δ₁  (vehicle retirement)",   color_grp = "External"),
+    delta_2 = list(label = "δ₂  (infra depreciation)",   color_grp = "External")
+  )
+
+  baseline_share <- simulate_model(state_0, policy, years, params)$pct_AV[years + 1] * 100
+
+  rows <- do.call(rbind, lapply(names(param_list), function(pn) {
+    meta <- param_list[[pn]]
+    lo_p <- params; lo_p[[pn]] <- params[[pn]] * 0.80
+    hi_p <- params; hi_p[[pn]] <- params[[pn]] * 1.20
+    lo_share <- simulate_model(state_0, policy, years, lo_p)$pct_AV[years + 1] * 100
+    hi_share <- simulate_model(state_0, policy, years, hi_p)$pct_AV[years + 1] * 100
+    data.frame(
+      param    = meta$label,
+      color_grp= meta$color_grp,
+      lo       = min(lo_share, hi_share),
+      hi       = max(lo_share, hi_share),
+      range    = abs(hi_share - lo_share)
+    )
+  }))
+
+  rows$param <- factor(rows$param, levels = rows$param[order(rows$range)])
+
+  ggplot(rows, aes(y = param)) +
+    geom_segment(aes(x = lo, xend = hi, yend = param, color = color_grp),
+                 linewidth = 10, alpha = 0.85, lineend = "round") +
+    geom_vline(xintercept = baseline_share, linewidth = 1.0, color = "#2D3748",
+               linetype = "solid") +
+    geom_text(aes(x = lo - 0.3, label = sprintf("%.1f%%", lo)),
+              hjust = 1, size = 3, fontface = "bold") +
+    geom_text(aes(x = hi + 0.3, label = sprintf("%.1f%%", hi)),
+              hjust = 0, size = 3, fontface = "bold") +
+    scale_color_manual(
+      values = c("OLS-derived" = "#4299E1", "External" = "#A0AEC0"),
+      name   = "Parameter source"
+    ) +
+    labs(
+      title    = "Figure SSM-2: Sensitivity Tornado Chart",
+      subtitle = "Year-30 AV share range when each parameter varies ±20%; baseline marked",
+      x        = "Year-30 AV Share (%)",
+      y        = NULL
+    ) +
+    theme_clean() +
+    theme(legend.position = "right", panel.grid.major.y = element_blank())
+}
+
+plot_ssm3_mc_bands <- function(scenarios, labels, mc_sims) {
+  focal <- c("No Policy", "Front-Loaded", "Aggressive")
+  focal_colors <- c(
+    "No Policy"    = "#CBD5E0",
+    "Front-Loaded" = "#4299E1",
+    "Aggressive"   = "#F56565"
+  )
+
+  # Build MC band data
+  band_df <- do.call(rbind, lapply(focal, function(sc) {
+    idx  <- which(labels == sc)
+    sims <- mc_sims[[idx]]
+    do.call(rbind, lapply(0:30, function(yr) {
+      vals <- sapply(sims, function(s) s$pct_AV[yr + 1] * 100)
+      data.frame(
+        year     = yr + 2025,
+        scenario = sc,
+        lo       = quantile(vals, 0.10),
+        hi       = quantile(vals, 0.90)
+      )
+    }))
+  }))
+
+  # Build mean line data
+  line_df <- do.call(rbind, lapply(focal, function(sc) {
+    idx <- which(labels == sc)
+    df  <- scenarios[[idx]]
+    data.frame(year = df$year + 2025, scenario = sc, pct_AV = df$pct_AV * 100)
+  }))
+
+  # CPUC validation point: ~185x growth over ~3 years → illustrative endpoint
+  cpuc <- data.frame(year = 2028, pct_AV = 1.4)
+
+  ggplot() +
+    geom_ribbon(data = band_df,
+                aes(x = year, ymin = lo, ymax = hi, fill = scenario),
+                alpha = 0.20) +
+    geom_line(data = line_df,
+              aes(x = year, y = pct_AV, color = scenario),
+              linewidth = 1.2) +
+    geom_point(data = cpuc, aes(x = year, y = pct_AV),
+               shape = 17, size = 3.5, color = "black") +
+    annotate("text", x = 2028.4, y = 1.4,
+             label = "CPUC validation\n(robotaxi ~185× growth, yr≈3)",
+             hjust = 0, size = 2.8, fontface = "italic") +
+    # Year-30 annotations
+    geom_text(
+      data = line_df %>% filter(year == 2055) %>%
+        mutate(label = paste0(scenario, "  ", round(pct_AV, 1), "%")),
+      aes(x = 2055.5, y = pct_AV, label = label, color = scenario),
+      hjust = 0, size = 2.8, fontface = "bold", show.legend = FALSE
+    ) +
+    scale_color_manual(values = focal_colors) +
+    scale_fill_manual(values  = focal_colors) +
+    scale_x_continuous(breaks = seq(2025, 2055, 5),
+                       expand = expansion(mult = c(0.01, 0))) +
+    coord_cartesian(xlim = c(2025, 2068)) +
+    scale_y_continuous(labels = function(x) paste0(x, "%")) +
+    labs(
+      title    = "Figure SSM-3: AV Fleet Adoption Trajectories with Monte Carlo Uncertainty Bands",
+      subtitle = "Solid lines = deterministic scenario; shaded = 10th–90th percentile of 100 MC runs",
+      x        = "Year",
+      y        = "AV Share of Fleet (%)"
+    ) +
+    theme_clean() +
+    theme(legend.position = "none")
+}
+
+plot_ssm4_surface <- function(params, scenarios, labels) {
+  # Use raw policy units so scenario points spread across the surface
+  r_seq <- seq(0, 15000, length.out = 120)
+  i_seq <- seq(0, 40e6,  length.out = 120)
+
+  grid <- expand.grid(r_val = r_seq, i_val = i_seq)
+  grid$rebate_norm <- grid$r_val / params$Price_AV
+  grid$infra_norm  <- sigmoid(5 * (log(pmax(grid$i_val, 1)) / log(params$I_ref) - 0.5))
+  grid$adoption    <- sigmoid(
+    params$beta_0 +
+    params$beta_1 * grid$rebate_norm +
+    params$beta_2 * grid$infra_norm
+  )
+
+  # Operating points — use actual policy r and i at year 15
+  ops <- do.call(rbind, lapply(seq_along(labels), function(idx) {
+    df  <- scenarios[[idx]]
+    row <- df[df$year == 15, ]
+    data.frame(
+      scenario = labels[idx],
+      r_val    = as.numeric(row$r),
+      i_val    = as.numeric(row$i),
+      adoption = as.numeric(row$adoption)
+    )
+  }))
+
+  # Contour label positions (in raw units)
+  contour_labels <- data.frame(
+    r_val = c(14000, 14000, 14000, 14000),
+    i_val = c(1e6, 5e6, 13e6, 28e6),
+    label = c("10%", "30%", "50%", "70%")
+  )
+
+  ggplot(grid, aes(x = r_val, y = i_val / 1e6)) +
+    geom_raster(aes(fill = adoption), interpolate = TRUE) +
+    geom_contour(aes(z = adoption),
+                 breaks = c(0.10, 0.30, 0.50, 0.70),
+                 color = "white", linewidth = 0.5, alpha = 0.9) +
+    geom_text(data = contour_labels,
+              aes(x = r_val, y = i_val / 1e6, label = label),
+              color = "white", size = 3, fontface = "bold", hjust = 1) +
+    geom_point(data = ops,
+               aes(x = r_val, y = i_val / 1e6, color = scenario),
+               shape = 8, size = 4, stroke = 1.8) +
+    geom_text(data = ops,
+              aes(x = r_val, y = i_val / 1e6, label = scenario, color = scenario),
+              size = 2.8, fontface = "bold", show.legend = FALSE,
+              vjust = -0.8, hjust = 0.5) +
+    scale_color_manual(values = COLORS, name = "Scenario") +
+    scale_fill_gradientn(
+      colors = c("#EBF8FF", "#4299E1", "#2B6CB0", "#1A365D"),
+      name   = "Adoption\nFraction",
+      labels = scales::percent
+    ) +
+    scale_x_continuous(labels = dollar_format(), expand = c(0, 0),
+                       name = "Rebate ($/vehicle)") +
+    scale_y_continuous(labels = function(x) paste0("$", x, "M"), expand = c(0, 0),
+                       name = "Annual Infrastructure Investment ($M)") +
+    labs(
+      title    = "Figure SSM-4: Logistic Adoption Surface",
+      subtitle = "Predicted adoption fraction across policy levers; ★ = scenario operating points at Year 15"
+    ) +
+    theme_clean() +
+    theme(legend.position = "right", panel.grid = element_blank())
+}
+
 state_0 <- c(A = 98, C = 512539, I = 6983872, K = 0.01)
 
 policy_none            <- c(r =     0, s =    0, i =      0)
@@ -534,6 +775,10 @@ print(plot_sensitivity_diverging(sens_results, labels))
 print(plot_phase_portrait(scenarios, labels))
 print(plot_total_spend(scenarios, labels))
 print(plot_spend_per_av(scenarios, labels))
+print(plot_ssm1_calibration(params))
+print(plot_ssm2_tornado(state_0, policy_aggressive, 30, params))
+print(plot_ssm3_mc_bands(scenarios, labels, mc_sims))
+print(plot_ssm4_surface(params, scenarios, labels))
 dev.off()
 
 scenarios_combined <- do.call(rbind, lapply(seq_along(scenarios), function(i) {

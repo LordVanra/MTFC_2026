@@ -407,6 +407,122 @@ plot_cell_efficiency <- function(densityHistory, timeHistory, cellIDs,
     theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8))
 }
 
+plot_fundamental_diagram <- function(rho_c = 26.5, q_max = 2200, rho_j = 135,
+                                     av_penetration = 0.70,
+                                     cap_gain = 0.12, rho_c_gain = 0.10, rho_j_gain = 0.08) {
+  v_f <- q_max / rho_c
+  w   <- -q_max / (rho_j - rho_c)
+
+  rho_c_av <- rho_c * (1 + rho_c_gain)
+  q_max_av <- q_max * (1 + cap_gain)
+  rho_j_av <- rho_j * (1 + rho_j_gain)
+
+  base_df <- data.frame(
+    rho = c(0, rho_c, rho_j),
+    q   = c(0, q_max, 0),
+    curve = "Baseline"
+  )
+  av_lbl <- sprintf("%.0f%% AV penetration", av_penetration * 100)
+  av_df <- data.frame(
+    rho = c(0, rho_c_av, rho_j_av),
+    q   = c(0, q_max_av, 0),
+    curve = av_lbl
+  )
+  df <- rbind(base_df, av_df)
+  df$curve <- factor(df$curve, levels = c("Baseline", av_lbl))
+
+  ann <- data.frame(
+    rho   = c(rho_c,  rho_j,  rho_c_av, rho_j_av),
+    q     = c(q_max,  0,      q_max_av, 0),
+    label = c(sprintf("rho_c = %.1f\nq_max = %d", rho_c, as.integer(q_max)),
+              sprintf("rho_j = %d", as.integer(rho_j)),
+              sprintf("rho_c* = %.1f\nq_max* = %d", rho_c_av, as.integer(q_max_av)),
+              sprintf("rho_j* = %d", as.integer(rho_j_av))),
+    hjust = c(-0.1, 0.5, -0.1, 0.5),
+    vjust = c(1.1, -0.5,  1.1, -0.5)
+  )
+
+  slope_lbl <- data.frame(
+    rho   = c(10, 100),
+    q     = c(10 * v_f * 0.55, q_max * 0.28),
+    label = c(sprintf("v_f = %.0f km/h", v_f), sprintf("w = %.0f km/h", w)),
+    angle = c(atan2(q_max, rho_c) * 180 / pi, atan2(-q_max, rho_j - rho_c) * 180 / pi)
+  )
+
+  ggplot(df, aes(x = rho, y = q, color = curve, linetype = curve)) +
+    geom_line(linewidth = 1.3) +
+    geom_point(data = rbind(base_df, av_df)[rbind(base_df, av_df)$rho %in%
+                 c(0, rho_c, rho_j, rho_c_av, rho_j_av), ],
+               aes(x = rho, y = q), size = 2.8, show.legend = FALSE) +
+    geom_vline(xintercept = rho_c, linetype = "dotted", color = "#3182CE", linewidth = 0.5) +
+    geom_text(data = ann,
+              aes(x = rho, y = q, label = label, hjust = hjust, vjust = vjust),
+              size = 3, inherit.aes = FALSE, color = "#2D3748", lineheight = 0.9) +
+    geom_text(data = slope_lbl,
+              aes(x = rho, y = q, label = label, angle = angle),
+              size = 3, color = "#718096", inherit.aes = FALSE) +
+    scale_color_manual(values = setNames(c("#3182CE", "#D97706"), c("Baseline", av_lbl))) +
+    scale_linetype_manual(values = setNames(c("solid", "dashed"), c("Baseline", av_lbl))) +
+    scale_x_continuous(limits = c(0, 150), breaks = seq(0, 150, 25),
+                       expand = expansion(mult = c(0, 0.02))) +
+    scale_y_continuous(limits = c(0, 2600), breaks = seq(0, 2500, 500),
+                       expand = expansion(mult = c(0, 0.04))) +
+    labs(title    = "Triangular Fundamental Diagram",
+         subtitle = sprintf(
+           "Baseline: v_f = %.0f km/h, w = %.0f km/h, rho_c = %.1f veh/km, q_max = %d veh/h, rho_j = %d veh/km\nDashed = AV-modified curve at p = %.0f%% penetration (shifted apex)",
+           v_f, w, rho_c, as.integer(q_max), as.integer(rho_j), av_penetration * 100),
+         x = "Density rho (veh/km)", y = "Flow q (veh/h)",
+         color = NULL, linetype = NULL) +
+    theme_traffic() +
+    theme(legend.position = "top")
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure CTM-2 : Congestion Heatmap of Boston ZIP Network
+# ─────────────────────────────────────────────────────────────────────────────
+plot_congestion_heatmap <- function(densityHistory, timeHistory, cellIDs, jamDensity) {
+  avg_density   <- colMeans(densityHistory)
+  rho_frac      <- avg_density / jamDensity
+  bottleneck_id <- cellIDs[which.max(rho_frac)]
+
+  df <- data.frame(
+    cell          = factor(as.character(cellIDs), levels = as.character(sort(cellIDs))),
+    rho_frac      = rho_frac,
+    is_bottleneck = cellIDs == bottleneck_id
+  )
+
+  ggplot(df, aes(x = cell, y = 1, fill = rho_frac)) +
+    geom_tile(color = "#E2E8F0", linewidth = 0.5) +
+    geom_text(aes(label = ifelse(is_bottleneck,
+                                 paste0(cell, "\n(bottleneck)"),
+                                 as.character(cell))),
+              size      = 2.6,
+              color     = ifelse(df$rho_frac > 0.6, "white", "#1A202C"),
+              fontface  = ifelse(df$is_bottleneck, "bold", "plain"),
+              lineheight = 0.85) +
+    scale_fill_gradientn(
+      colors = c("#FEFCE8", "#FDE68A", "#FB923C", "#DC2626", "#7F1D1D"),
+      values = scales::rescale(c(0, 0.3, 0.55, 0.80, 1.0)),
+      limits = c(0, 1),
+      breaks = c(0, 0.25, 0.5, 0.75, 1.0),
+      labels = c("0.00", "0.25", "0.50", "0.75", "1.00 (jam)"),
+      name   = "rho / rho_j",
+      guide  = guide_colorbar(barwidth = 1, barheight = 10,
+                              ticks.colour = "#4A5568", frame.colour = "#4A5568")
+    ) +
+    scale_y_continuous(breaks = NULL, expand = c(0, 0)) +
+    labs(
+      title    = "Congestion Heatmap - Boston ZIP Network",
+      subtitle = sprintf(
+        "Mean density (rho/rho_j) per cell across simulation · rho_j = %d veh/km · bottleneck = cell %s (%.2f x jam density)",
+        as.integer(jamDensity), bottleneck_id, max(rho_frac)),
+      x = "Cell ID", y = NULL
+    ) +
+    theme_traffic() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+          panel.grid  = element_blank())
+}
+
 params <- list(
   freeFlowSpeed       = 83,
   congestionWaveSpeed = 19.2,
@@ -549,6 +665,8 @@ print(plot_capacity_scatter(densityHistory, cellIDs, cellLengths, maxVehicles,
                             criticalVehicles, params$jamDensity, params))
 print(plot_cell_efficiency(densityHistory, timeHistory, cellIDs, cellLengths, flowHistory))
 print(plot_flow_matrix_styled(cumulativeFlowMatrix, cellIDs))
+print(plot_fundamental_diagram())
+print(plot_congestion_heatmap(densityHistory, timeHistory, cellIDs, params$jamDensity))
 
 dev.off()
 cat("Plots saved to outputs/ctm_analysis.pdf\n")
