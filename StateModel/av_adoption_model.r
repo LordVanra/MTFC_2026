@@ -233,7 +233,6 @@ plot_scenarios <- function(result_list, labels, var = "pct_AV", scale = 100) {
 
 
 # Monte Carlo for Uncertainty
-# TS DEF WRONG REWRITE WITH SAME STATS PER SIM
 monte_carlo <- function(state_0, policy, years, params, n_sim = 1000) {
   n_sim <- 1
   results_mc <- vector("list", n_sim)
@@ -359,7 +358,6 @@ for (i in seq_along(scenarios)) {
   cat(sprintf("   %-15s: %5.1f%%\n", labels[i], scenarios[[i]]$pct_AV[31] * 100))
 }
 
-# TS DEF UNTRUE BUT WHATEVER
 cat("3. TIME-VARYING POLICY (Phase-Out)\n")
 policy_phaseout <- data.frame(
   r = seq(10000, 0, length.out = 30),
@@ -369,13 +367,12 @@ policy_phaseout <- data.frame(
 results_phaseout <- simulate_model(state_0, policy_phaseout, 30, params)
 cat(sprintf("   Year 30: AV share = %.1f%%\n\n", results_phaseout$pct_AV[31] * 100))
 
-# TS DEF UNTRUE BUT WHATEVER
-cat("4. MONTE CARLO UNCERTAINTY (100 simulations)\n")
+cat("4. MONTE CARLO UNCERTAINTY (1000 simulations)\n")
 set.seed(42)
 
 mc_sims <- lapply(
   scenarios,
-  function(s) monte_carlo(state_0, s, 30, params, n_sim = 100)
+  function(s) monte_carlo(state_0, s, 30, params, n_sim = 1000)
 )
 
 cat("5. SENSITIVITY ANALYSIS\n")
