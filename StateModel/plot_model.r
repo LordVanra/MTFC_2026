@@ -6,7 +6,7 @@ library(scales)
 library(ggridges)
 
 params <- list(
-  delta_1  = 0.0045,
+  delta_1  = 0.045,
   delta_2  = 0.05,
   S        = 26970,
   Price_AV = 40000,
