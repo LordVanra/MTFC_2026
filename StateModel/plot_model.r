@@ -11,7 +11,7 @@ params <- list(
   S        = 26970,
   Price_AV = 40000,
   I_ref    = 66214286,
-  beta_0   = -2.026,
+  beta_0   = -3.5,
   beta_1   =  3.250,
   beta_2   =  3.997,
   cap_0    = 0.20,
@@ -29,11 +29,13 @@ step_model <- function(state, policy, params) {
   s   <- as.numeric(policy["s"])
   i   <- as.numeric(policy["i"])
   I_iPlus1   <- (1 - params$delta_2) * I_i + i
-  I_scaled <- sigmoid(5 * (log(I_iPlus1) / log(params$I_ref) - 0.5))
+  # Concave power-law: diminishing returns, no double-sigmoid compression
+  I_scaled <- sqrt(pmin(I_iPlus1 / params$I_ref, 1))
   price_adv  <- r / params$Price_AV
   a_uncapped <- sigmoid(params$beta_0 + params$beta_1 * price_adv + params$beta_2 * I_scaled)
   cap        <- params$cap_0 + params$gamma * s + k_i
-  K_iPlus1   <- max(0, min(1, k_i + params$gamma * s + sigmoid(k_i)))
+  # Cap grows only through manufacturer subsidy spending (sigmoid removed — caused ~+0.5 jump at k≈0)
+  K_iPlus1   <- max(0, min(1, k_i + params$gamma * s))
   a          <- min(a_uncapped, cap)
   A_iPlus1   <- (1 - params$delta_1) * A_i + a * params$S
   C_iPlus1   <- (1 - params$delta_1) * C_i + params$S
@@ -228,7 +230,7 @@ plot_heatmap <- function(scenarios, labels) {
 plot_demand_vs_supply <- function(scenarios, labels) {
   df <- combined_scenarios(scenarios, labels) %>%
     mutate(
-      I_scaled = sigmoid(5 * (log(pmax(I, 1)) / log(params$I_ref) - 0.5)),
+      I_scaled = sqrt(pmin(pmax(I, 0) / params$I_ref, 1)),
       demand   = pmin(sigmoid(params$beta_0 + params$beta_1 * (r / params$Price_AV) + params$beta_2 * I_scaled), 1),
       binding  = ifelse(adoption < demand * 0.999, "Supply Constrained", "Demand Limited")
     )
@@ -444,6 +446,87 @@ plot_spend_per_av <- function(scenarios, labels) {
     theme(legend.position = "none")
 }
 
+# ── Tier Plot Functions ───────────────────────────────────────────────────────
+
+plot_tier_trajectories <- function(tier_scenarios, tier_labels, tier_families, tier_nums) {
+  df <- do.call(rbind, lapply(seq_along(tier_scenarios), function(i) {
+    d            <- tier_scenarios[[i]]
+    d$scenario   <- tier_labels[i]
+    d$family     <- tier_families[i]
+    d$tier       <- tier_nums[i]
+    d
+  })) %>% mutate(pct_AV = pct_AV * 100)
+  df$tier   <- factor(df$tier,   levels = c("1/3", "2/3", "3/3"))
+  df$family <- factor(df$family, levels = c("High Rebates", "Infra Focus",
+                                             "Aggressive", "Moderate Rebate", "Supply Push"))
+  tier_colors <- c("1/3" = "#A0D2F0", "2/3" = "#4299E1", "3/3" = "#1A365D")
+  tier_widths <- c("1/3" = 0.55, "2/3" = 0.9, "3/3" = 1.35)
+
+  ggplot(df, aes(x = year, y = pct_AV, color = tier, linewidth = tier, group = scenario)) +
+    geom_line(alpha = 0.9) +
+    facet_wrap(~family, ncol = 5) +
+    scale_color_manual(values = tier_colors, name = "Budget Tier") +
+    scale_linewidth_manual(values = tier_widths, name = "Budget Tier") +
+    scale_y_continuous(labels = function(x) paste0(x, "%")) +
+    labs(
+      title    = "AV Adoption Trajectories by Policy Family and Budget Tier",
+      subtitle = "Three funding levels (1/3, 2/3, and 3/3 of full budget) for each of 5 policy families",
+      x = "Year", y = "AV Share of Fleet (%)"
+    ) +
+    theme_clean() +
+    theme(strip.text = element_text(face = "bold", size = 9), legend.position = "bottom") +
+    guides(color     = guide_legend(override.aes = list(linewidth = 1.2)),
+           linewidth = "none")
+}
+
+plot_tier_efficiency <- function(tier_scenarios, tier_labels, tier_families, tier_nums, params) {
+  df <- do.call(rbind, lapply(seq_along(tier_scenarios), function(i) {
+    sim   <- tier_scenarios[[i]]
+    spend <- sim %>%
+      filter(year > 0) %>%
+      mutate(annual_spend = r * (adoption * params$S) + s + i) %>%
+      summarise(total_B = sum(annual_spend) / 1e9) %>%
+      pull(total_B)
+    data.frame(
+      label   = tier_labels[i],
+      family  = tier_families[i],
+      tier    = tier_nums[i],
+      spend_B = spend,
+      pct_AV  = sim$pct_AV[31] * 100
+    )
+  }))
+  df$tier   <- factor(df$tier,   levels = c("1/3", "2/3", "3/3"))
+  df$family <- factor(df$family, levels = c("High Rebates", "Infra Focus",
+                                             "Aggressive", "Moderate Rebate", "Supply Push"))
+
+  family_colors <- c(
+    "High Rebates"    = "#4299E1",
+    "Infra Focus"     = "#48BB78",
+    "Aggressive"      = "#F56565",
+    "Moderate Rebate" = "#9F7AEA",
+    "Supply Push"     = "#ED8936"
+  )
+  tier_shapes <- c("1/3" = 21, "2/3" = 22, "3/3" = 23)
+
+  ggplot(df, aes(x = spend_B, y = pct_AV)) +
+    geom_line(aes(color = family, group = family), alpha = 0.35, linewidth = 0.8) +
+    geom_point(aes(color = family, fill = family, shape = tier), size = 4.5, stroke = 1.3) +
+    geom_text(aes(label = paste0(tier, "\n", round(pct_AV, 1), "%"), color = family),
+              size = 2.5, fontface = "bold", vjust = -0.9, show.legend = FALSE) +
+    scale_color_manual(values = family_colors, name = "Policy Family") +
+    scale_fill_manual(values  = family_colors, name = "Policy Family") +
+    scale_shape_manual(values = tier_shapes,   name = "Budget Tier") +
+    scale_x_continuous(labels = dollar_format(suffix = "B", prefix = "$")) +
+    scale_y_continuous(labels = function(x) paste0(x, "%")) +
+    labs(
+      title    = "Policy Efficiency: Cumulative Spend vs. Year-30 AV Share",
+      subtitle = "Each point = one budget tier; lines connect tiers within the same policy family to reveal marginal returns",
+      x        = "Total 30-Year Policy Spend ($ Billions)",
+      y        = "Year-30 AV Fleet Share (%)"
+    ) +
+    theme_clean()
+}
+
 plot_ssm1_calibration <- function(params) {
   set.seed(7)
 
@@ -626,7 +709,7 @@ plot_ssm4_surface <- function(params, scenarios, labels) {
 
   grid <- expand.grid(r_val = r_seq, i_val = i_seq)
   grid$rebate_norm <- grid$r_val / params$Price_AV
-  grid$infra_norm  <- sigmoid(5 * (log(pmax(grid$i_val, 1)) / log(params$I_ref) - 0.5))
+  grid$infra_norm  <- sqrt(pmin(grid$i_val / params$I_ref, 1))
   grid$adoption    <- sigmoid(
     params$beta_0 +
     params$beta_1 * grid$rebate_norm +
@@ -722,6 +805,28 @@ policy_frontloaded <- data.frame(
   i = c(seq(40e6,  5e6, length.out = 15), rep(2e6,  15))
 )
 
+# ── Policy Tiers: 1/3, 2/3, 3/3 of Full Budget ───────────────────────────────
+# High Rebate  (full: r=10000, s=500, i=5e6)
+policy_hr_t1  <- c(r = 10000/3, s =  500/3, i =  5e6/3)
+policy_hr_t2  <- c(r = 20000/3, s = 1000/3, i = 10e6/3)
+policy_hr_t3  <- c(r = 10000,   s =  500,   i =  5e6)
+# Infra Focus  (full: r=1000, s=500, i=20e6)
+policy_if_t1  <- c(r =  1000/3, s =  500/3, i = 20e6/3)
+policy_if_t2  <- c(r =  2000/3, s = 1000/3, i = 40e6/3)
+policy_if_t3  <- c(r =  1000,   s =  500,   i = 20e6)
+# Aggressive   (full: r=12000, s=5000, i=40e6)
+policy_agg_t1 <- c(r =  4000,   s = 5000/3, i = 40e6/3)
+policy_agg_t2 <- c(r =  8000,   s =10000/3, i = 80e6/3)
+policy_agg_t3 <- c(r = 12000,   s = 5000,   i = 40e6)
+# Moderate Rebate (full: r=5000, s=1000, i=10e6)
+policy_mr_t1  <- c(r =  5000/3, s = 1000/3, i = 10e6/3)
+policy_mr_t2  <- c(r = 10000/3, s = 2000/3, i = 20e6/3)
+policy_mr_t3  <- c(r =  5000,   s = 1000,   i = 10e6)
+# Supply Push  (full: r=0, s=8000, i=30e6)
+policy_sp_t1  <- c(r = 0, s =  8000/3, i = 10e6)
+policy_sp_t2  <- c(r = 0, s = 16000/3, i = 20e6)
+policy_sp_t3  <- c(r = 0, s =  8000,   i = 30e6)
+
 
 
 results_none           <- simulate_model(state_0, policy_none,           30, params)
@@ -735,6 +840,46 @@ results_rampup         <- simulate_model(state_0, policy_rampup,         30, par
 results_pulse          <- simulate_model(state_0, policy_pulse,          30, params)
 results_adaptive       <- simulate_model(state_0, policy_adaptive,       30, params)
 results_frontloaded    <- simulate_model(state_0, policy_frontloaded,    30, params)
+
+# ── Tier Simulations ─────────────────────────────────────────────────────────
+results_hr_t1  <- simulate_model(state_0, policy_hr_t1,  30, params)
+results_hr_t2  <- simulate_model(state_0, policy_hr_t2,  30, params)
+results_hr_t3  <- simulate_model(state_0, policy_hr_t3,  30, params)
+results_if_t1  <- simulate_model(state_0, policy_if_t1,  30, params)
+results_if_t2  <- simulate_model(state_0, policy_if_t2,  30, params)
+results_if_t3  <- simulate_model(state_0, policy_if_t3,  30, params)
+results_agg_t1 <- simulate_model(state_0, policy_agg_t1, 30, params)
+results_agg_t2 <- simulate_model(state_0, policy_agg_t2, 30, params)
+results_agg_t3 <- simulate_model(state_0, policy_agg_t3, 30, params)
+results_mr_t1  <- simulate_model(state_0, policy_mr_t1,  30, params)
+results_mr_t2  <- simulate_model(state_0, policy_mr_t2,  30, params)
+results_mr_t3  <- simulate_model(state_0, policy_mr_t3,  30, params)
+results_sp_t1  <- simulate_model(state_0, policy_sp_t1,  30, params)
+results_sp_t2  <- simulate_model(state_0, policy_sp_t2,  30, params)
+results_sp_t3  <- simulate_model(state_0, policy_sp_t3,  30, params)
+
+tier_scenarios <- list(
+  results_hr_t1,  results_hr_t2,  results_hr_t3,
+  results_if_t1,  results_if_t2,  results_if_t3,
+  results_agg_t1, results_agg_t2, results_agg_t3,
+  results_mr_t1,  results_mr_t2,  results_mr_t3,
+  results_sp_t1,  results_sp_t2,  results_sp_t3
+)
+tier_labels <- c(
+  "HR 1/3",  "HR 2/3",  "HR 3/3",
+  "IF 1/3",  "IF 2/3",  "IF 3/3",
+  "Agg 1/3", "Agg 2/3", "Agg 3/3",
+  "MR 1/3",  "MR 2/3",  "MR 3/3",
+  "SP 1/3",  "SP 2/3",  "SP 3/3"
+)
+tier_families <- c(
+  rep("High Rebates",    3),
+  rep("Infra Focus",     3),
+  rep("Aggressive",      3),
+  rep("Moderate Rebate", 3),
+  rep("Supply Push",     3)
+)
+tier_nums <- rep(c("1/3", "2/3", "3/3"), 5)
 
 # All scenarios together
 scenarios <- list(
@@ -780,6 +925,17 @@ print(plot_ssm2_tornado(state_0, policy_aggressive, 30, params))
 print(plot_ssm3_mc_bands(scenarios, labels, mc_sims))
 print(plot_ssm4_surface(params, scenarios, labels))
 dev.off()
+
+# ── Tier Analysis PDF (new — does not modify av_model_plots_analyzed.pdf) ─────
+pdf("av_tier_analysis.pdf", width = 16, height = 9)
+print(plot_tier_trajectories(tier_scenarios, tier_labels, tier_families, tier_nums))
+print(plot_tier_efficiency(tier_scenarios, tier_labels, tier_families, tier_nums, params))
+dev.off()
+
+cat("\nYear-30 AV shares by policy tier:\n")
+for (i in seq_along(tier_scenarios)) {
+  cat(sprintf("  %-12s %.1f%%\n", tier_labels[i], tier_scenarios[[i]]$pct_AV[31] * 100))
+}
 
 scenarios_combined <- do.call(rbind, lapply(seq_along(scenarios), function(i) {
   df          <- scenarios[[i]]
