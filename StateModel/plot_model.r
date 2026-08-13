@@ -5,20 +5,52 @@ library(patchwork)
 library(scales)
 library(ggridges)
 
+# -----------------------------------------------------------------------------
+# Parameters come from config/params.R ONLY. Do not redefine them here.
+# Previously this block hardcoded values that disagreed with the manuscript:
+#   delta_2  0.05   vs 0.023 reported in Table 13 ("revised from initial 5%")
+#   Price_AV 40000  vs $48,000 reported in Table 13
+#   beta_0   -3.5   vs -2.026 reported in Table 4
+#   S        26970  asserted, with no derivation shown
+# -----------------------------------------------------------------------------
+.find_config <- function() {
+  for (p in c("config/params.R", "../config/params.R", "../../config/params.R")) {
+    if (file.exists(p)) return(p)
+  }
+  stop("config/params.R not found - run from the repository root.")
+}
+source(.find_config())
+source(file.path(dirname(.find_config()), "..", "scripts", "cost_model.R"))
+DERIVED <- derive_params()
+
 params <- list(
-  delta_1  = 0.045,
-  delta_2  = 0.05,
-  S        = 26970,
-  Price_AV = 40000,
-  I_ref    = 66214286,
-  beta_0   = -3.5,
-  beta_1   =  3.250,
-  beta_2   =  3.997,
-  cap_0    = 0.20,
-  gamma    = 0.00002
+  delta_1  = par_val("SSM", "delta_1"),
+  delta_2  = par_val("SSM", "delta_2"),
+  S        = DERIVED$S_BOS,                 # DERIVED: S_US * C_0 / C_US
+  Price_AV = par_val("SSM", "Price_AV"),
+  I_ref    = par_val("SSM", "I_ref"),
+  beta_0   = par_val("SSM", "beta_0"),
+  beta_1   = par_val("SSM", "beta_1"),
+  beta_2   = par_val("SSM", "beta_2"),
+  cap_0    = par_val("SSM", "cap_0"),
+  gamma    = par_val("SSM", "gamma"),
+  infra_transform = par_val("SSM", "infra_transform")
 )
 
 sigmoid <- function(z) 1 / (1 + exp(-z))
+
+# Infrastructure normalisation. The manuscript prints a LOGISTIC map in both
+# Eq.(2) and the Appendix A.1 listing; the production code used a concave
+# square-root map. They are now switchable from config so that whichever is
+# chosen, exactly one form exists and the paper can be written to match it.
+infra_scale <- function(I_next, params) {
+  switch(params$infra_transform,
+    sqrt     = sqrt(pmin(I_next / params$I_ref, 1)),
+    linear   = pmin(I_next / params$I_ref, 1),
+    logistic = sigmoid(I_next / params$I_ref),
+    stop("Unknown infra_transform: ", params$infra_transform)
+  )
+}
 
 step_model <- function(state, policy, params) {
   A_i <- as.numeric(state["A"])
@@ -28,18 +60,22 @@ step_model <- function(state, policy, params) {
   r   <- as.numeric(policy["r"])
   s   <- as.numeric(policy["s"])
   i   <- as.numeric(policy["i"])
+
   I_iPlus1   <- (1 - params$delta_2) * I_i + i
-  # Concave power-law: diminishing returns, no double-sigmoid compression
-  I_scaled <- sqrt(pmin(I_iPlus1 / params$I_ref, 1))
+  I_scaled   <- infra_scale(I_iPlus1, params)
+
   price_adv  <- r / params$Price_AV
   a_uncapped <- sigmoid(params$beta_0 + params$beta_1 * price_adv + params$beta_2 * I_scaled)
+
   cap        <- params$cap_0 + params$gamma * s + k_i
-  # Cap grows only through manufacturer subsidy spending (sigmoid removed — caused ~+0.5 jump at k≈0)
   K_iPlus1   <- max(0, min(1, k_i + params$gamma * s))
   a          <- min(a_uncapped, cap)
+
   A_iPlus1   <- (1 - params$delta_1) * A_i + a * params$S
   C_iPlus1   <- (1 - params$delta_1) * C_i + params$S
-  c(A = A_iPlus1, C = C_iPlus1, I = I_iPlus1, K = K_iPlus1, adoption = a, cap = cap)
+
+  c(A = A_iPlus1, C = C_iPlus1, I = I_iPlus1, K = K_iPlus1,
+    adoption = a, cap = cap, demand = a_uncapped)
 }
 
 simulate_model <- function(state_0, policy, years, params) {
@@ -81,7 +117,12 @@ simulate_model <- function(state_0, policy, years, params) {
   return(out)
 }
 
-monte_carlo <- function(state_0, policy, years, params, n_sim = 100) {
+# N_MC is the single authority for Monte Carlo sample size. Figures 2 and 8 of
+# the manuscript claim N = 1000 while every call site passed n_sim = 100.
+# Change it here and nowhere else; captions are generated from this value.
+N_MC <- 1000
+
+monte_carlo <- function(state_0, policy, years, params, n_sim = N_MC) {
   results_mc <- vector("list", n_sim)
   for (i in 1:n_sim) {
     p_i         <- params
@@ -367,7 +408,7 @@ plot_policy_controls <- function(tv_scenarios, tv_labels) {
 plot_total_spend <- function(scenarios, labels) {
   df <- combined_scenarios(scenarios, labels) %>%
     filter(year > 0) %>%
-    mutate(annual_spend = r * (adoption * params$S) + s + i) %>%
+    mutate(annual_spend = (r + s) * (adoption * params$S) + i) %>%   # see scripts/cost_model.R
     group_by(scenario) %>%
     mutate(cumulative_spend = cumsum(annual_spend) / 1e9) %>%
     ungroup()
@@ -407,7 +448,7 @@ plot_total_spend <- function(scenarios, labels) {
 plot_spend_per_av <- function(scenarios, labels) {
   df <- combined_scenarios(scenarios, labels) %>%
     filter(year > 0) %>%
-    mutate(annual_spend = r * (adoption * params$S) + s + i * params$S * params$Price_AV / 1000) %>%
+    mutate(annual_spend = (r + s) * (adoption * params$S) + i) %>%   # see scripts/cost_model.R
     group_by(scenario) %>%
     mutate(cumulative_spend = cumsum(annual_spend),
            spend_per_av     = cumulative_spend / pmax(A, 1)) %>%
@@ -484,7 +525,7 @@ plot_tier_efficiency <- function(tier_scenarios, tier_labels, tier_families, tie
     sim   <- tier_scenarios[[i]]
     spend <- sim %>%
       filter(year > 0) %>%
-      mutate(annual_spend = r * (adoption * params$S) + s + i) %>%
+      mutate(annual_spend = (r + s) * (adoption * params$S) + i) %>%   # see scripts/cost_model.R
       summarise(total_B = sum(annual_spend) / 1e9) %>%
       pull(total_B)
     data.frame(
@@ -899,7 +940,7 @@ tv_scenarios <- list(results_phaseout, results_rampup, results_pulse,
 tv_labels    <- c("Phaseout", "Ramp-Up", "Pulse", "Adaptive", "Front-Loaded")
 
 set.seed(42)
-mc_sims <- lapply(scenarios, function(s) monte_carlo(state_0, s, 30, params, n_sim = 100))
+mc_sims <- lapply(scenarios, function(s) monte_carlo(state_0, s, 30, params, n_sim = N_MC))
 
 sens_results <- lapply(scenarios, function(s) {
   list(
@@ -948,3 +989,29 @@ cat("\nYear-30 AV shares by scenario:\n")
 for (i in seq_along(scenarios)) {
   cat(sprintf("  %-20s %.1f%%\n", labels[i], scenarios[[i]]$pct_AV[31] * 100))
 }
+
+# =============================================================================
+#  Export derived policy costs so downstream models never hardcode them.
+#  ConvectionDiffusion/plot_results.r previously carried its own POLICY_COSTS
+#  literal, which disagreed with the manuscript (Moderate Rebate 3.80 vs $3.0B)
+#  and drove every "reduction per $1B" number in Table 9.
+# =============================================================================
+cost_table <- scenario_cost_table(scenarios, labels, params$S,
+                                  discount_rate = par_val("COST", "discount_rate"))
+.out_dir <- if (dir.exists("outputs")) "outputs" else { dir.create("../outputs", showWarnings = FALSE); "../outputs" }
+write.csv(cost_table, file.path(.out_dir, "policy_costs.csv"), row.names = FALSE)
+
+cat("\nDerived 30-year policy costs ($B):\n")
+print(cost_table[order(cost_table$total_cost_B), c("scenario", "total_cost_B", "final_share_AV")],
+      row.names = FALSE)
+
+# Machine-readable record of every value the manuscript cites.
+paper_values <- list(
+  n_monte_carlo   = N_MC,
+  S_BOS           = params$S,
+  params          = params,
+  year30_share    = setNames(sapply(scenarios, function(s) s$pct_AV[31]), labels),
+  cost_B          = setNames(cost_table$total_cost_B, cost_table$scenario)
+)
+dput(paper_values, file = file.path(.out_dir, "paper_values_ssm.txt"))
+cat("\nWrote outputs/policy_costs.csv and outputs/paper_values_ssm.txt\n")
