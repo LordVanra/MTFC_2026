@@ -55,17 +55,16 @@ GROUP BY r.MOVESScenarioID, r.yearID, r.monthID, r.hourID,
          r.fuelTypeID, r.processID, r.avgSpeedBinID, b.avgBinSpeed;
 
 -- ---------------------------------------------------------------------------
--- 2. Single fleet-average factor per fuel type, for config/params.R.
---    NOTE: this is an UNWEIGHTED mean across model years. It is fine as a first
---    pass but is not the fleet-weighted number - see section 3 before quoting
---    it in the paper.
+-- 2. Single representative factor at one speed bin, for config/params.R.
+--    NOTE: ef_by_speed is already summed across model years; do NOT AVG across
+--    speed bins.
 -- ---------------------------------------------------------------------------
 SELECT
-    MOVESScenarioID, yearID, monthID, fuel_name, process_name,
-    ROUND(AVG(rate_per_distance), 6) AS rate_unweighted
+    MOVESScenarioID, yearID, monthID, fuel_name, process_name, avgSpeedBinID,
+    ROUND(rate_per_distance, 6) AS rate_at_speed_bin
 FROM ef_by_speed
 WHERE hourID = @HOUR
-GROUP BY MOVESScenarioID, yearID, monthID, fuelTypeID, processID
+  AND avgSpeedBinID = 7
 ORDER BY MOVESScenarioID, fuelTypeID, processID;
 
 -- ---------------------------------------------------------------------------

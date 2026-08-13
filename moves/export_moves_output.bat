@@ -81,8 +81,7 @@ for %%D in (bos_2025_out bos_2050_out bos_2026_out) do (
 
     REM Run log - records any warnings MOVES raised
     !MYSQL! !CRED! --batch --raw %%D -e "SELECT * FROM movesrun" > %%D_03_movesrun.txt 2>nul
-    !MYSQL! !CRED! --batch --raw %%D -e "SELECT * FROM movceserror" > %%D_04_errors.txt 2>nul
-    !MYSQL! !CRED! --batch --raw %%D -e "SELECT * FROM moveserror" >> %%D_04_errors.txt 2>nul
+    !MYSQL! !CRED! --batch --raw %%D -e "SELECT * FROM moveserror" > %%D_04_errors.txt 2>nul
 
     echo Wrote %%D_*.txt
   )
