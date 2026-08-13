@@ -1,0 +1,2 @@
+MOVESRunID	outputTimePeriod	timeUnits	distanceUnits	massUnits	energyUnits	runSpecFileName	runSpecDescription	runSpecFileDateTime	runDateTime	scale	minutesDuration	defaultDatabaseUsed	masterVersion	masterComputerID	masterIDNumber	domain	domainCountyID	domainCountyName	domainDatabaseServer	domainDatabaseName	expectedDONEFiles	retrievedDONEFiles	models
+1	Hour	hour	km	g	J	C:\Users\mysti\Downloads\Bost_output_2050		2026-08-12 23:51:49	2026-08-12 23:51:54	Rates	12.4444	movesdb20241112	MOVES5.0.1	Tanay_Laptop	18161463759333445865	DEFAULT	NULL	NULL	NULL	NULL	581	581	onroad

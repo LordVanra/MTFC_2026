@@ -1,0 +1,17 @@
+Massachusetts Vehicle Census - Boston, 2025
+
+Total Boston-garaged VMT        :      3120290639 mi/yr
+VMT in the 28 modelled ZIPs     :      3042645065 mi/yr  (97.5% of city)
+Derived fleet at 11400 mi/veh/yr :          266899 vehicles
+
+Observed fuel-class VMT share, Boston:
+ YEAR zev_share hyb_share     TOTAL
+ 2020  0.005548   0.03844 2.634e+09
+ 2021  0.007764   0.04243 2.790e+09
+ 2022  0.015331   0.05223 2.911e+09
+ 2023  0.035458   0.06283 3.033e+09
+ 2024  0.046527   0.07830 3.117e+09
+ 2025  0.049204   0.09611 3.120e+09
+
+ZEV VMT share 2020 -> 2025:  0.55% -> 4.92% 
+Total VMT change 2020 -> 2025:  +18.4% 
