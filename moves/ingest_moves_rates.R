@@ -13,8 +13,8 @@ HOUR      <- 8      # 07:00-07:59
 SPEED_BIN <- 7      # ~30 mph = 48 km/h, matches CTM free-flow 50 km/h
 
 # Light-duty VMT split. US light trucks have exceeded cars for years; 60/40 is
-# the conventional split. THIS IS AN ASSUMPTION - it is not in the MOVES output
-# because Distance Traveled was not enabled in the run.
+# the conventional split. THIS IS AN ASSUMPTION because the exported
+# rateperdistance extract does not include VMT by source type for weighting.
 W_CAR   <- 0.40
 W_TRUCK <- 0.60
 
