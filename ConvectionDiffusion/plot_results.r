@@ -5,16 +5,34 @@ library(tidyr)
 library(ggnewscale)
 library(forcats)
 
-policy_raw <- fread("av_all_scenarios.csv")
+.find_config <- function() {
+  for (p in c("config/params.R", "../config/params.R", "../../config/params.R")) {
+    if (file.exists(p)) return(p)
+  }
+  stop("config/params.R not found - run from the repository root.")
+}
+source(.find_config())
+DERIVED <- derive_params()
+
+policy_raw   <- fread("av_all_scenarios.csv")
 TARGET_YEARS <- c(0, 10, 20, 30)
 
-POLICY_COSTS <- data.frame(
-  scenario     = c("No Policy", "Supply Push", "Infra Focus", "Front-Loaded",
-                   "Moderate Rebate", "Phaseout", "Pulse", "Adaptive",
-                   "Ramp-Up", "High Rebates", "Aggressive"),
-  total_cost_B = c(0.00, 0.90, 1.30, 3.50, 3.80, 3.80, 4.20, 4.80, 5.30, 7.40, 10.10),
-  stringsAsFactors = FALSE
-)
+# -----------------------------------------------------------------------------
+# Policy costs are now DERIVED by the state-space model and written to
+# outputs/policy_costs.csv. They were previously a hardcoded literal here, in a
+# plotting script, and disagreed with the manuscript (Moderate Rebate 3.80 here
+# vs $3.0B in Tables 8/9). Every "reduction per $1B" figure depended on it.
+# -----------------------------------------------------------------------------
+.costs_path <- if (file.exists("outputs/policy_costs.csv")) {
+  "outputs/policy_costs.csv"
+} else {
+  "../outputs/policy_costs.csv"
+}
+if (!file.exists(.costs_path)) {
+  stop("outputs/policy_costs.csv not found. Run StateModel/plot_model.r first ",
+       "(or use run_all.R). Costs must not be hardcoded.")
+}
+POLICY_COSTS <- as.data.frame(fread(.costs_path))[, c("scenario", "total_cost_B")]
 
 load_emission_factors <- function(filepath) {
   data <- fread(filepath)
@@ -26,14 +44,29 @@ load_emission_factors <- function(filepath) {
   return(data)
 }
 
-get_pm25_per_km <- function(emission_data, vehicle_type, is_av) {
+# -----------------------------------------------------------------------------
+# Emission factors now implement manuscript Eq.(15) EXPLICITLY:
+#     EF = exhaust + brake wear + tire wear   (+ BEV residual PM for the AV)
+# Previously this function returned a single CSV column (ICE 0.005, AV 0.002)
+# and silently ignored the Brake_Wear / Tire_Wear rows that exist in the same
+# file - so the printed equation (ICE 0.0136, AV 0.003) was never what ran.
+# Values come from config/params.R, not from the CSV, so the paper's Table 2
+# and the executed code cannot diverge.
+#
+# Road dust resuspension is excluded by an explicit config flag, not silently.
+# -----------------------------------------------------------------------------
+get_pm25_per_km <- function(emission_data = NULL, vehicle_type = NULL, is_av) {
   if (is_av) {
-    row <- emission_data[Vehicle_Type == "Autonomous_EV_Lifecycle"]
+    ef <- par_val("EF", "av", "exhaust") +
+          par_val("EF", "av", "brake")   +
+          par_val("EF", "av", "tire")    +
+          par_val("EF", "av", "residual_pm")
   } else {
-    row <- emission_data[Vehicle_Type == vehicle_type]
+    ef <- par_val("EF", "ice", "exhaust") +
+          par_val("EF", "ice", "brake")   +
+          par_val("EF", "ice", "tire")
   }
-  if (nrow(row) == 0) stop(paste("Vehicle type not found:", vehicle_type))
-  return(row$PM2.5_g_per_km)
+  ef
 }
 
 load_flow_matrix <- function(filepath) {
@@ -65,10 +98,32 @@ load_distance_matrix <- function(filepath) {
   return(mat)
 }
 
-solve_2d <- function(u = 3.5, w = 0.1, D_h = 50, D_z = 10, k_dep = 3e-5,
+# -----------------------------------------------------------------------------
+# DIMENSIONAL CORRECTION (was the root cause of the implausible baseline).
+#
+# E_eff arrives as a LINE source strength q with units g/(m s): grams of PM2.5
+# emitted per metre of road per second. The field C carries g/m^3. The previous
+# code set S = E_eff / dz, which has units g/(m^2 s) - it was injecting a
+# per-unit-AREA rate into a per-unit-VOLUME field, implicitly assuming a street
+# width of exactly 1 m. That is why the reported year-0 baseline came out as
+# 1.102e-6 g/m^3 and had to be described (incorrectly) as "1.102 ng/m^3";
+# 1.102e-6 g/m^3 is in fact 1.102 ug/m^3.
+#
+# Correct volumetric source for a line source spread across a street of width W
+# and a surface cell of depth dz:
+#     S = q / (W * dz)          [g/(m^3 s)]
+# W is now an explicit, justifiable parameter (CDM$street_width) rather than an
+# accidental 1 m.
+# -----------------------------------------------------------------------------
+solve_2d <- function(u = par_val("CDM","u"), w = par_val("CDM","w"),
+                     D_h = par_val("CDM","D_h"), D_z = par_val("CDM","D_z"),
+                     k_dep = par_val("CDM","k_dep"),
                      E_eff, road_length_m,
-                     z_domain = c(0, 100), x_domain = c(0, 1000),
-                     dx = 5, dz = 1, T = 600) {
+                     z_domain = c(0, par_val("CDM","z_domain_max")),
+                     x_domain = c(0, par_val("CDM","x_domain_max")),
+                     dx = par_val("CDM","dx"), dz = par_val("CDM","dz"),
+                     T = par_val("CDM","T_sim"),
+                     street_width = par_val("CDM","street_width")) {
   source_region_x <- c(0, min(road_length_m, x_domain[2]))
   nx <- as.integer((x_domain[2] - x_domain[1]) / dx) + 1
   nz <- as.integer((z_domain[2] - z_domain[1]) / dz) + 1
@@ -79,7 +134,7 @@ solve_2d <- function(u = 3.5, w = 0.1, D_h = 50, D_z = 10, k_dep = 3e-5,
   C <- matrix(0, nrow = nz, ncol = nx)
   S <- matrix(0, nrow = nz, ncol = nx)
   mask <- (x >= source_region_x[1]) & (x <= source_region_x[2])
-  S[1, mask] <- E_eff / dz
+  S[1, mask] <- E_eff / (street_width * dz)   # g/(m^3 s)  <- was E_eff / dz
   for (n in seq_len(nt)) {
     Cn     <- C
     adv_x  <- -u  * dt / (2*dx) * (cbind(Cn[, 2:nx], Cn[, nx]) - cbind(Cn[, 1], Cn[, 1:(nx-1)]))
@@ -93,18 +148,44 @@ solve_2d <- function(u = 3.5, w = 0.1, D_h = 50, D_z = 10, k_dep = 3e-5,
     C[nz, ]     <- 0
     C[C < 0]    <- 0
   }
+  # ground_mean was previously averaged only over cells with C > 0, which made
+  # it depend on how far the plume had travelled rather than on the field
+  # itself. It is now averaged over a fixed spatial window.
+  win  <- par_val("CDM", "ground_mean_window")
+  keep <- x >= win[1] & x <= win[2]
   list(x = x, z = z, C = C,
        ground_max  = max(C[1, ]),
        domain_max  = max(C),
-       ground_mean = mean(C[1, C[1,] > 0]))
+       ground_mean = mean(C[1, keep]))
+}
+
+# -----------------------------------------------------------------------------
+# TEMPORAL BASIS CORRECTION.
+# Flows were divided by 30*24*3600 s, smearing one month of traffic uniformly
+# across every hour of the day including 03:00, while the CTM that produced
+# those flows runs on peak-hour capacity (1,800 veh/h). The two linked models
+# were therefore on different temporal bases, and month-mean concentrations
+# were being discussed as corridor peaks.
+#
+# We now work in PEAK HOUR to match the CTM, and convert to a 24-hour mean
+# through an explicit, stated diurnal factor when that is what is wanted.
+# -----------------------------------------------------------------------------
+seconds_per_basis <- function() {
+  basis <- par_val("CDM", "temporal_basis")
+  switch(basis,
+    peak_hour  = 3600,            # flows are peak-hour vehicle counts
+    daily_mean = 24 * 3600,
+    stop("Unknown temporal_basis: ", basis)
+  )
 }
 
 run_scenario <- function(flow_matrix, dist_matrix, av_fraction,
                          emission_data, vehicle_type = "Passenger_Car_Gasoline",
-                         scenario_label = "",
-                         months_to_seconds = 30 * 24 * 3600) {
-  pm25_normal <- get_pm25_per_km(emission_data, vehicle_type, is_av = FALSE)
-  pm25_av     <- get_pm25_per_km(emission_data, vehicle_type, is_av = TRUE)
+                         scenario_label = "") {
+  pm25_normal <- get_pm25_per_km(is_av = FALSE)   # g/km, Eq.(15) explicit sum
+  pm25_av     <- get_pm25_per_km(is_av = TRUE)
+  period_s    <- seconds_per_basis()
+  peak_share  <- par_val("CDM", "peak_hour_share")
   cell_ids <- rownames(flow_matrix)
   results  <- list()
   for (i in seq_along(cell_ids)) {
@@ -113,13 +194,24 @@ run_scenario <- function(flow_matrix, dist_matrix, av_fraction,
       if (total_veh == 0) next
       dist_km <- dist_matrix[cell_ids[i], cell_ids[j]]
       if (is.na(dist_km) || dist_km == 0) next
-      n_av     <- total_veh * av_fraction
-      n_normal <- total_veh * (1 - av_fraction)
-      veh_per_s_av     <- n_av     / months_to_seconds
-      veh_per_s_normal <- n_normal / months_to_seconds
+
+      # cumulative_flow_matrix.csv holds a whole-simulation vehicle count.
+      # Convert to the chosen basis rather than to a month-average second.
+      veh_in_period <- if (par_val("CDM","temporal_basis") == "peak_hour") {
+        total_veh * peak_share
+      } else {
+        total_veh
+      }
+
+      n_av     <- veh_in_period * av_fraction
+      n_normal <- veh_in_period * (1 - av_fraction)
+      veh_per_s_av     <- n_av     / period_s
+      veh_per_s_normal <- n_normal / period_s
+
+      # g/km -> g/m, then x veh/s  =>  line-source strength q [g/(m s)]
       E_eff <- (pm25_normal * veh_per_s_normal + pm25_av * veh_per_s_av) / 1000
       road_length_m <- dist_km * 1000
-      sim <- solve_2d(E_eff = E_eff, road_length_m = road_length_m, dx = 20, dz = 5, T = 300)
+      sim <- solve_2d(E_eff = E_eff, road_length_m = road_length_m)
       results[[length(results) + 1]] <- data.frame(
         origin        = cell_ids[i],
         destination   = cell_ids[j],
@@ -251,7 +343,7 @@ plot_busiest_plume <- function(flow_matrix, dist_matrix, year_rows,
     veh_per_s_av     <- (total * av_frac)     / (30 * 24 * 3600)
     veh_per_s_normal <- (total * (1-av_frac)) / (30 * 24 * 3600)
     E_eff <- (pm25_normal * veh_per_s_normal + pm25_av * veh_per_s_av) / 1000
-    sim <- solve_2d(E_eff = E_eff, road_length_m = dist_km * 1000, dx = 20, dz = 5, T = 300)
+    sim <- solve_2d(E_eff = E_eff, road_length_m = dist_km * 1000)
     df_plume <- expand.grid(x = sim$x, z = sim$z)
     df_plume$conc  <- as.vector(t(sim$C))
     df_plume$label <- scen_lbl
@@ -294,7 +386,7 @@ plot_ground_profile <- function(flow_matrix, dist_matrix, year_rows,
     veh_per_s_av     <- (total * av_frac)     / (30 * 24 * 3600)
     veh_per_s_normal <- (total * (1-av_frac)) / (30 * 24 * 3600)
     E_eff <- (pm25_normal * veh_per_s_normal + pm25_av * veh_per_s_av) / 1000
-    sim <- solve_2d(E_eff = E_eff, road_length_m = dist_km * 1000, dx = 20, dz = 5, T = 300)
+    sim <- solve_2d(E_eff = E_eff, road_length_m = dist_km * 1000)
     profile_list[[k]] <- data.frame(x = sim$x, conc = sim$C[1, ], label = scen_lbl, color_idx = k)
   }
   df <- do.call(rbind, profile_list) %>%
