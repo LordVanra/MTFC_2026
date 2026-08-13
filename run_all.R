@@ -41,13 +41,7 @@ run_in <- function(dir, script) {
 
 # -----------------------------------------------------------------------------
 banner("PARAMETER PROVENANCE CHECK")
-flags <- unsourced_report()
-if (length(flags)) {
-  cat("Parameters requiring source work before submission (", length(flags), "):\n", sep = "")
-  for (f in flags) cat("  - ", f, "\n", sep = "")
-} else {
-  cat("All parameters sourced.\n")
-}
+print_provenance()
 D <- derive_params()
 cat(sprintf("\nDerived: S_BOS = %.0f veh/yr  (S_US %.3g x C_0 %.0f / C_US %.3g)\n",
             D$S_BOS, par_val("SSM","S_US"), par_val("SSM","C_0"), par_val("SSM","C_US")))
